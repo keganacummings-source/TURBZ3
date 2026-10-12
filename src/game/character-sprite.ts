@@ -104,7 +104,7 @@ export function drawCharacterSprite(
 
   ctx.imageSmoothingEnabled = false;
 
-  const gearList = opts?.gear ?? a.packGear ?? [];
+  const gearList = opts?.gear ?? (a as ActorDraw & { packGear?: Gear[] }).packGear ?? [];
   const packPieces = gearList.map((g) => asPackGear(g)).filter(Boolean) as NonNullable<
     ReturnType<typeof asPackGear>
   >[];
@@ -193,5 +193,7 @@ function drawHeld(
 }
 
 export function shouldUseCharacterSprite(a: ActorDraw & { usePack?: boolean }): boolean {
-  return !!(a.usePack && a.female);
+  if (a.ghost) return false;
+  // Female player body uses CharacterPack whenever sprites.ts routes through drawCharacterSprite.
+  return a.female !== false && a.usePack !== false;
 }
