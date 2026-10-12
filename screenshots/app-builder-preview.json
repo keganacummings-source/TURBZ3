@@ -1,0 +1,36 @@
+{
+  "url": "http://127.0.0.1:8080/",
+  "viewports": {
+    "desktop": {
+      "width": 1280,
+      "height": 800,
+      "status": 200,
+      "title": "TURBZ",
+      "hasCanvas": false,
+      "bodyTextLen": 77,
+      "bodyTextHash": "9ac3dc325e1e923c7e98afd20da289bb99b46a3a4d867e726afe67b8e9c06f64",
+      "bodyTextPrefix": "TURBZ API TURBZ Checking your account. Autosave and lobbies wait",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-preview.png"
+    },
+    "mobile": {
+      "width": 390,
+      "height": 844,
+      "status": 200,
+      "title": "TURBZ",
+      "hasCanvas": false,
+      "bodyTextLen": 77,
+      "bodyTextHash": "9ac3dc325e1e923c7e98afd20da289bb99b46a3a4d867e726afe67b8e9c06f64",
+      "bodyTextPrefix": "TURBZ API TURBZ Checking your account. Autosave and lobbies wait",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-preview-mobile.png"
+    }
+  },
+  "brandWarnings": [],
+  "authWarnings": [],
+  "verdictFile": "/workspace/screenshots/app-builder-preview.json"
+}

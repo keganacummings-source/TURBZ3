@@ -1,0 +1,41 @@
+{
+  "url": "http://127.0.0.1:8081/",
+  "viewports": {
+    "desktop": {
+      "width": 1280,
+      "height": 800,
+      "status": 200,
+      "title": "TURBZ",
+      "hasCanvas": false,
+      "bodyTextLen": 156,
+      "bodyTextHash": "c17da06dd9d311772c930da79ca956f6d90512b97b55e792eefb17d8a419df41",
+      "bodyTextPrefix": "TURBZ API Sign in to hunt Username and password only. That accou",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-built.png"
+    },
+    "mobile": {
+      "width": 390,
+      "height": 844,
+      "status": 200,
+      "title": "TURBZ",
+      "hasCanvas": false,
+      "bodyTextLen": 156,
+      "bodyTextHash": "c17da06dd9d311772c930da79ca956f6d90512b97b55e792eefb17d8a419df41",
+      "bodyTextPrefix": "TURBZ API Sign in to hunt Username and password only. That accou",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-built-mobile.png"
+    }
+  },
+  "brandWarnings": [],
+  "authWarnings": [],
+  "verdictFile": "/workspace/screenshots/app-builder-built.json",
+  "divergesFromBaseline": true,
+  "baselineReasons": [
+    "desktop: body text changed (77 -> 156 chars, hash mismatch)",
+    "mobile: body text changed (77 -> 156 chars, hash mismatch)"
+  ]
+}
