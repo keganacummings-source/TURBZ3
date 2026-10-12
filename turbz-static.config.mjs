@@ -1,6 +1,10 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
 export default defineConfig({
   plugins: [tailwindcss(), react()],
@@ -8,9 +12,12 @@ export default defineConfig({
   resolve: {
     tsconfigPaths: true,
   },
+  publicDir: "public",
   build: {
-    outDir: "/tmp/turbz-static",
+    outDir: "dist-static",
     emptyOutDir: true,
-    rollupOptions: { input: "/workspace/cloudflare.html" },
+    rollupOptions: {
+      input: resolve(__dirname, "cloudflare.html"),
+    },
   },
 });
