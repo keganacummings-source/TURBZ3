@@ -43,6 +43,9 @@ import {
   moveTactic,
   bodyRead,
   npcOffers,
+  defenseFail,
+  reactOf,
+  rollCover,
   type Gear,
   type GhostLook,
   type MapId,
@@ -55,6 +58,7 @@ import {
   type EnchantRoll,
   type FxId,
 } from "./content";
+import type { GraveBody } from "./social-types";
 import { drawActor, drawMonster, drawSetAura, drawShadowName, fxColor } from "./sprites";
 import {
   BIOME_LABEL,
@@ -135,6 +139,8 @@ export type Snap = {
   grind: string;
   accountScore: number;
   turn: string;
+  rules: "hunt" | "hardcore";
+  duel: null | { phase: "answer" | "yours"; attacker: string; move: string; about: string; beat: string };
 };
 
 
@@ -168,6 +174,7 @@ type Flo = { x: number; y: number; text: string; life: number; color: string };
 type TurnStep = { side: "you" | "foe" | "spirit"; id: string };
 
 const SAVE_KEY = "turbz-v3";
+const HC_KEY = "turbz-hardcore-v1";
 const emptySnap = (): Snap => ({
 	mode: "title",
 	hasSave: false,
@@ -229,7 +236,9 @@ const emptySnap = (): Snap => ({
 	autoplay: false,
 	grind: "",
 	accountScore: 0,
-	turn: ""
+	turn: "",
+	rules: "hunt",
+	duel: null
 });
 let snap: Snap = emptySnap();
 const listeners = new Set<() => void>();
@@ -321,6 +330,13 @@ export class TurbzGame {
 		this.wardT = 0;
 		this.rollT = 0;
 		this.castLock = 0;
+		this.rules = "hunt";
+		this.duel = null;
+		this.defFatigue = 0;
+		this.duelAllow = false;
+		this.partyIn = 36;
+		this.graveFn = null;
+		this.cloudHard = null;
 		this.autoCd = 0;
 		this.netAcc = 0;
 		this.mobAcc = 0;
@@ -579,13 +595,14 @@ export class TurbzGame {
 			deathBanked: false
 		};
 		this.boot(save);
-		this.say(`${save.name} wakes at the Crownfall hearth.`);
+		this.say(this.rules === "hardcore" ? `${save.name} wakes for the long grind. Skills are the score. Parties strike first.` : `${save.name} wakes at the Crownfall hearth.`);
 		if (as) this.openRoom(as.role, as.code);
 		this.tone(220, .12);
 	}
 	continueGame(as?: { role: "host" | "guest"; code: string }) {
-		const cached = this.cloudCache;
-		const raw = cached ? JSON.stringify(cached) : localStorage.getItem(SAVE_KEY);
+		const cached = this.rules === "hardcore" ? this.cloudHard : this.cloudCache;
+		const key = this.rules === "hardcore" ? HC_KEY : SAVE_KEY;
+		const raw = cached ? JSON.stringify(cached) : localStorage.getItem(key);
 		if (!raw) return false;
 		try {
 			this.boot(JSON.parse(raw));
@@ -720,10 +737,14 @@ export class TurbzGame {
 			return;
 		}
 		this.tickPlayer(dt);
-		if (this.role !== "guest") this.tickMobs(dt);
-		else this.tickGuestHurt(dt);
+		if (this.role !== "guest") {
+			if (this.rules === "hardcore" && this.duel) this.tickGuestHurt(dt);
+			else this.tickMobs(dt);
+			if (this.rules === "hardcore") this.tickParties(dt);
+		} else this.tickGuestHurt(dt);
 		this.tickSpirits(dt);
-		this.tickTurns(dt);
+		if (this.rules === "hardcore") this.tickHardcore(dt);
+		else this.tickTurns(dt);
 		this.tickParty(dt);
 		this.tickFx(dt);
 		this.netAcc += dt;
@@ -749,8 +770,9 @@ export class TurbzGame {
 		this.wardT = Math.max(0, this.wardT - dt);
 		this.rollT = Math.max(0, this.rollT - dt);
 		this.castLock = Math.max(0, this.castLock - dt);
+		if (!this.duel) this.defFatigue = Math.max(0, (this.defFatigue ?? 0) - dt * 0.35);
 		if (this.lunge) this.tickLunge(dt);
-		else if (this.autoplay) this.tickAutoplay(dt);
+		else if (this.autoplay && !(this.rules === "hardcore" && this.duel)) this.tickAutoplay(dt);
 		else {
 			let ix = 0;
 			let iy = 0;
@@ -761,6 +783,11 @@ export class TurbzGame {
 			if (this.stick.x || this.stick.y) {
 				ix = this.stick.x;
 				iy = this.stick.y;
+			}
+			if (this.rules === "hardcore" && this.duel) {
+				ix = 0;
+				iy = 0;
+				this.dest = null;
 			}
 			if (ix === 0 && iy === 0 && this.dest && !rooted) {
 				const dx = this.dest.x - save.x;
@@ -1211,7 +1238,12 @@ export class TurbzGame {
 		if (!save) return;
 		const id = save.bar[index];
 		const move = id ? MOVE_BY_ID[id] : void 0;
-		if (move) this.castMove(move);
+		if (!move) return;
+		if (this.rules === "hardcore") {
+			this.answerDuel(move);
+			return;
+		}
+		this.castMove(move);
 	}
 	arsenal(save) {
 		const ids = new Set(save.innate?.length ? save.innate : ["measured"]);
@@ -1268,6 +1300,13 @@ export class TurbzGame {
 	castMove(move, prefer) {
 		const save = this.save;
 		if (!save || this.dead || snap.panel === "death") return false;
+		if (this.rules === "hardcore" && !this.duelAllow) {
+			const kind = reactOf(move);
+			if (kind !== "heal" && kind !== "guard") {
+				this.say("They have to step into range. You do not open.");
+				return false;
+			}
+		}
 		if (this.castLock > 0 || this.lunge) return false;
 		if (this.status.some((s) => s.id === "sleep")) return false;
 		if ((this.cds[move.id] ?? 0) > 0) return false;
@@ -1308,15 +1347,30 @@ export class TurbzGame {
 			return true;
 		}
 		if (tactic === "roll") {
-			this.rollT = .55;
+			const failPct = defenseFail(move, this.defFatigue ?? 0);
+			const failed = Math.random() * 100 < failPct;
+			this.defFatigue = (this.defFatigue ?? 0) + (failed ? 1.15 : 0.75);
+			const travel = failed ? 8 : 26 + Math.random() * 50;
+			this.rollCoverNow = rollCover(travel, 78);
+			this.rollFailed = failed;
+			this.rollT = 0.5;
 			const side = this.facing > 0 ? 1 : -1;
-			this.tryMove(-side * 28, side * 36);
-			this.float(save.x, save.y - 36, "ROLL", "#e7d9ff");
+			if (!failed) this.tryMove(-side * travel * 0.45, side * Math.min(30, travel * 0.32));
+			this.float(save.x, save.y - 36, failed ? "TRIP" : "ROLL", failed ? "#c4473a" : "#e7d9ff");
 			this.playMoveFx(move, save.x, save.y - 10, save.x + side * 20, save.y);
-			if (target && move.power > 0 && Math.hypot(target.x - save.x, target.y - save.y) < 70) this.resolveHit(move, target, false);
+			if (!failed && target && move.power > 0 && Math.hypot(target.x - save.x, target.y - save.y) < 86) this.resolveHit(move, target, false, 0.36);
 			return true;
 		}
 		if (tactic === "blink" && target) {
+			const failPct = defenseFail(move, this.defFatigue ?? 0);
+			if (Math.random() * 100 < failPct) {
+				this.defFatigue = (this.defFatigue ?? 0) + 1;
+				this.float(save.x, save.y - 46, "SNAG", "#c4473a");
+				this.playMoveFx(move, save.x, save.y - 20, target.x, target.y - 12);
+				if (move.power > 0) this.resolveHit(move, target, false, 0.24);
+				return true;
+			}
+			this.defFatigue = Math.max(0, (this.defFatigue ?? 0) - 0.2);
 			const behind = target.x >= save.x ? 1 : -1;
 			const nx = target.x + behind * 30;
 			const ny = target.y + 4;
@@ -1327,10 +1381,13 @@ export class TurbzGame {
 			this.facing = behind > 0 ? -1 : 1;
 			this.float(save.x, save.y - 46, "BLINK", "#b4a6ff");
 			this.playMoveFx(move, save.x, save.y - 20, target.x, target.y - 12);
-			if (move.power > 0) this.resolveHit(move, target, false);
+			if (move.power > 0) this.resolveHit(move, target, false, 0.55);
 			return true;
 		}
 		if (tactic === "lunge" && target) {
+			const failPct = defenseFail(move, this.defFatigue ?? 0);
+			const failed = Math.random() * 100 < failPct;
+			this.defFatigue = (this.defFatigue ?? 0) + (failed ? 1 : 0.45);
 			this.lunge = {
 				t: 0,
 				dur: .42,
@@ -1339,9 +1396,13 @@ export class TurbzGame {
 				tx: target.x - this.facing * 18,
 				ty: target.y,
 				mob: target.id,
-				hit: false
+				hit: false,
+				failed,
+				power: move.power,
+				moveId: move.id
 			};
 			this.cds[move.id] = Math.max(cd, .9);
+			if (failed) this.float(save.x, save.y - 40, "SNAG", "#c4473a");
 			return true;
 		}
 		if (tactic === "heavy" || tactic === "channel") {
@@ -1377,9 +1438,9 @@ export class TurbzGame {
 		if (!lung.hit && u >= .4) {
 			lung.hit = true;
 			const mob = this.mobs.find((m) => m.id === lung.mob && m.alive);
-			const move = MOVES.find((m) => moveTactic(m) === "lunge") ?? MOVES[0];
+			const move = MOVE_BY_ID[lung.moveId] ?? MOVES.find((m) => moveTactic(m) === "lunge") ?? MOVES[0];
 			this.playMoveFx(move, save.x, save.y - 16, lung.tx, lung.ty);
-			if (mob) this.resolveHit(move, mob, false, 1.15);
+			if (mob) this.resolveHit(move, mob, false, lung.failed ? 0.22 : 0.72);
 		}
 		if (u >= 1) this.lunge = null;
 	}
@@ -1614,8 +1675,9 @@ export class TurbzGame {
 	}
 	gainXp(n) {
 		const save = this.save;
-		save.xp += n;
-		this.gainAccount(n);
+		const grant = this.rules === "hardcore" ? Math.max(1, Math.floor(n * 0.72)) : n;
+		save.xp += grant;
+		this.gainAccount(grant);
 		let need = xpNeed(save.level);
 		while (save.xp >= need && save.level < 50) {
 			save.xp -= need;
@@ -1632,6 +1694,7 @@ export class TurbzGame {
 		if (!save || save.map !== "world" || !this.world) return;
 		const mark = Math.floor(save.level / 20);
 		if (mark < 1 || mark <= (save.evilMark ?? 0)) return;
+		if (this.rules === "hardcore") return;
 		save.evilMark = mark;
 		this.spawnEvilWitch();
 	}
@@ -1692,7 +1755,8 @@ export class TurbzGame {
 	gainSkill(id, amount) {
 		const st = this.save.skills[id];
 		if (!st || st.level >= 60) return;
-		st.xp += amount;
+		const gain = this.rules === "hardcore" ? Math.max(1, Math.floor(amount * 2.4)) : amount;
+		st.xp += gain;
 		const need = skillNeed(st.level);
 		if (st.xp >= need) {
 			st.xp -= need;
@@ -1818,6 +1882,8 @@ export class TurbzGame {
 		let dmg = (4 + m.level * 1.25 + move.power * (form === "spell" ? .16 : .08)) * (pure ? 1 : tm === 0 ? .2 : tm) * (m.boss ? 1.35 : 1);
 		if (form === "melee") dmg *= 1.3;
 		else if (form === "ranged") dmg = mitigate(dmg, this.playerArmor());
+		if (m.party) dmg *= 0.58;
+		if (m.summoner) dmg *= 0.82;
 		dmg *= 1 - Math.min(.45, this.chan("ward") / 160 + this.buff.ward);
 		if (this.status.some((s) => s.id === "shell")) dmg *= .7;
 		if (Math.random() * 100 < this.chan("echo_guard")) {
@@ -1840,8 +1906,18 @@ export class TurbzGame {
 			return;
 		}
 		if (this.rollT > 0) {
-			this.float(save.x, save.y - 36, "ROLL", "#e7d9ff");
-			return;
+			const cover = this.rollCoverNow ?? 0.4;
+			if (this.rollFailed) {
+				amount *= 1.24;
+				this.float(save.x, save.y - 36, "TRIP", "#c4473a");
+			} else if (cover >= 0.98) {
+				this.float(save.x, save.y - 36, "CLEAR", "#e7d9ff");
+				return;
+			} else {
+				amount *= 1 - cover * 0.85;
+				this.float(save.x, save.y - 36, cover > 0.55 ? "GRAZE" : "CLIP", "#e7d9ff");
+				if (amount < 0.75) return;
+			}
 		}
 		let dmg = amount;
 		if (this.shield > 0) {
@@ -1873,7 +1949,8 @@ export class TurbzGame {
 			return;
 		}
 		for (const g of save.gear) this.noteFound(g);
-		this.bankAccount(save);
+		const scored = this.bankAccount(save);
+		this.emitGrave(save, scored);
 		this.dead = true;
 		this.dest = null;
 		publish({ panel: "rebirth" });
@@ -2042,7 +2119,7 @@ export class TurbzGame {
 		}
 	}
 	harvestNow(id, node) {
-		this.nodeCd[id] = 14;
+		this.nodeCd[id] = this.rules === "hardcore" ? 7 : 14;
 		const luck = 1 + this.chan("harvest") / 100;
 		if (node === "ore") {
 			const n = Math.max(1, Math.floor((1 + Math.random()) * luck));
@@ -2068,15 +2145,21 @@ export class TurbzGame {
 		this.persist();
 	}
 	bankAccount(save: Save) {
-		if (save.deathBanked) return;
+		if (save.deathBanked) return 0;
 		let score = save.level * 50 + save.xp + Math.floor(save.kyo / 2);
 		for (const g of save.gear) score += gearScore(g);
 		for (const n of Object.values(save.bag)) score += (n ?? 0) * 4;
-		for (const sk of Object.values(save.skills)) score += Math.max(0, (sk.level - 1) * 6);
+		for (const sk of Object.values(save.skills)) score += Math.max(0, (sk.level - 1) * 8);
 		for (const s of save.spirits ?? []) score += this.spiritPower(s);
+		if (this.rules === "hardcore") {
+			let skill = 0;
+			for (const sk of Object.values(save.skills)) skill += Math.max(0, (sk.level - 1) * 24);
+			score += skill;
+		}
 		save.accountScore = (save.accountScore ?? 0) + score;
 		save.deathBanked = true;
 		this.say(`Account Score +${score}. It stays.`);
+		return score;
 	}
 	fightTarget(): Mob | null {
 		const save = this.save;
@@ -3024,7 +3107,8 @@ export class TurbzGame {
 		this.mobs = [];
 		publish({
 			...emptySnap(),
-			hasSave: !!this.cloudCache || !!localStorage.getItem(SAVE_KEY),
+			rules: this.rules,
+			hasSave: !!((this.rules === "hardcore" ? this.cloudHard : this.cloudCache) || localStorage.getItem(this.rules === "hardcore" ? HC_KEY : SAVE_KEY)),
 			mode: "title"
 		});
 	}
@@ -3223,9 +3307,10 @@ export class TurbzGame {
 	persist() {
 		if (!this.save) return;
 		for (const g of this.save.gear) this.noteFound(g);
-		localStorage.setItem(SAVE_KEY, JSON.stringify(this.save));
+		const key = this.rules === "hardcore" ? HC_KEY : SAVE_KEY;
+		localStorage.setItem(key, JSON.stringify(this.save));
 		if (!this.cloudFn) return;
-		const json = JSON.stringify(this.save);
+		const json = JSON.stringify({ slot: this.rules === "hardcore" ? "hardcore" : "hunt", save: this.save });
 		window.clearTimeout(this.cloudTimer);
 		this.cloudTimer = window.setTimeout(() => this.cloudFn?.(json), 700);
 	}
@@ -3237,7 +3322,35 @@ export class TurbzGame {
 		const save = raw;
 		if (!save.name || !save.race) return;
 		this.cloudCache = save;
-		publish({ hasSave: true });
+		if (this.rules !== "hardcore") publish({ hasSave: true });
+	}
+	rememberHard(raw) {
+		if (!raw || typeof raw !== "object") return;
+		const save = raw;
+		if (!save.name || !save.race) return;
+		this.cloudHard = save;
+		if (this.rules === "hardcore") publish({ hasSave: true });
+	}
+	swapRules(rules) {
+		if (this.save) this.persist();
+		this.rules = rules === "hardcore" ? "hardcore" : "hunt";
+		this.duel = null;
+		this.save = null;
+		this.mobs = [];
+		this.dead = false;
+		const key = this.rules === "hardcore" ? HC_KEY : SAVE_KEY;
+		const cached = this.rules === "hardcore" ? this.cloudHard : this.cloudCache;
+		let local = false;
+		try { local = !!localStorage.getItem(key); } catch { local = false; }
+		publish({
+			...emptySnap(),
+			rules: this.rules,
+			hasSave: !!(cached || local),
+			mode: "title"
+		});
+	}
+	attachGrave(fn) {
+		this.graveFn = fn;
 	}
 	openShell(sx, sy) {
 		this.openInspect(-9999, -9999, sx, sy);
@@ -3563,7 +3676,7 @@ export class TurbzGame {
 					type: m.type,
 					cd: this.cds[id] ?? 0,
 					max,
-					tag: `${tac} · ${formTag(m)}`
+					tag: `${reactOf(m)} · ${formTag(m)}${defenseFail(m, 0) ? ` · ${defenseFail(m, 0)}% slip` : ""}`
 				};
 			}),
 			gear: save.gear,
@@ -3611,7 +3724,15 @@ export class TurbzGame {
 			shrine: this.shrine ? `${TYPES[this.shrine.type].name} shrine · round ${this.shrine.round}/3` : "",
 			companion: (save.spirits ?? []).filter((s) => s.hp > 0).map((s) => `${s.name} lv${s.level}`).join(", ") || "No spirits",
 			accountScore: save.accountScore ?? 0,
-			turn: this.turnQ[0] ? (this.turnQ[0].side === "you" ? "Your turn" : this.turnQ[0].side === "spirit" ? "Spirit" : "Enemy") : "",
+			turn: this.duel ? (this.duel.phase === "yours" ? "Your verse" : `${this.duel.lead?.name ?? "They"} readies`) : this.turnQ[0] ? (this.turnQ[0].side === "you" ? "Your turn" : this.turnQ[0].side === "spirit" ? "Spirit" : "Enemy") : "",
+			rules: this.rules === "hardcore" ? "hardcore" : "hunt",
+			duel: this.duel ? {
+				phase: this.duel.phase === "yours" ? "yours" : "answer",
+				attacker: this.duel.lead?.name ?? "",
+				move: MOVE_BY_ID[this.duel.moveId]?.name ?? "",
+				about: MOVE_BY_ID[this.duel.moveId]?.about ?? "",
+				beat: this.duel.beat ?? ""
+			} : null,
 			box: save.box.map((p) => `${MONSTER_BY_ID[p.species]?.name ?? "Spirit"} lv ${p.level}`),
 			known: save.known.map((id) => ({
 				id,
@@ -3675,6 +3796,10 @@ export class TurbzGame {
 				about: def.about
 			})),
 			bounty: (() => {
+				if (this.rules === "hardcore") {
+					const n = this.mobs.filter((m) => m.alive && m.party).length;
+					return n ? `Witch party · ${n} still standing` : "The wilds are quiet. A party will form.";
+				}
 				const witch = this.mobs.find((m) => m.witch && m.alive);
 				if (!witch) return "";
 				return witch.huntIn > 0 ? `${witch.name} · ${Math.ceil(witch.huntIn)}s before she hunts` : `${witch.name} is hunting you`;
@@ -4307,7 +4432,344 @@ export class TurbzGame {
 			scale: 1.02
 		});
 	}
-};
+	emitGrave(save, score) {
+		if (!this.graveFn || !score) return;
+		const gear = [];
+		for (const slot of ["weapon", "head", "chest", "legs", "feet", "relic"]) {
+			const g = this.piece(slot);
+			if (!g) continue;
+			gear.push({
+				slot,
+				name: g.name,
+				level: g.level,
+				quality: qualityName(g.quality),
+				type: TYPES[g.type]?.name ?? g.type,
+				enchants: (g.enchants ?? []).map((e) => ({ name: ENCHANT_BY_ID[e.id]?.name ?? e.id, power: e.power })),
+				moves: (g.moves ?? []).map((id) => MOVE_BY_ID[id]?.name ?? id)
+			});
+		}
+		const body: GraveBody = {
+			mode: this.rules === "hardcore" ? "hardcore" : "hunt",
+			score,
+			name: save.name,
+			race: RACES.find((r) => r.id === save.race)?.name ?? save.race,
+			level: save.level,
+			accountScore: save.accountScore ?? 0,
+			skills: SKILLS.map((sk) => ({ name: sk.name, level: save.skills[sk.id]?.level ?? 1 })),
+			gear,
+			note: this.rules === "hardcore" ? "Died grinding the hardcore wilds." : "Died on the hunt."
+		};
+		try { this.graveFn(body); } catch { /* the board can wait */ }
+	}
+	tickParties(dt) {
+		const save = this.save;
+		if (!save || save.map !== "world" || this.dead || this.duel) return;
+		if (this.mobs.some((m) => m.alive && m.party)) return;
+		this.partyIn = (this.partyIn ?? 22) - dt;
+		if (this.partyIn > 0) return;
+		this.partyIn = 46 + Math.random() * 30;
+		this.spawnHuntParty();
+	}
+	spawnHuntParty() {
+		const save = this.save;
+		if (!save || !this.world) return;
+		const witches = 2 + Math.floor(Math.random() * 9);
+		const summoners = 1 + Math.floor(Math.random() * 5);
+		const party = `party-${nextUid()}`;
+		const lvl = Math.max(1, save.level);
+		let anchorX = save.x + 220;
+		let anchorY = save.y;
+		for (let i = 0; i < 28; i++) {
+			const ang = Math.random() * Math.PI * 2;
+			const dist = 190 + Math.random() * 150;
+			const wx = save.x + Math.cos(ang) * dist;
+			const wy = save.y + Math.sin(ang) * dist;
+			if (blocked(this.world, wx, wy)) continue;
+			anchorX = wx;
+			anchorY = wy;
+			break;
+		}
+		const pool = MOVES.filter((m) => m.power > 8 && m.power < 56 && m.effect !== "mend" && reactOf(m) === "strike");
+		const make = (summoner, index) => {
+			const race = RACES[Math.floor(Math.random() * RACES.length)];
+			const name = WITCH_NAMES[Math.floor(Math.random() * WITCH_NAMES.length)];
+			const spell = pool.find((m) => m.type === race.type) ?? pool[index % Math.max(1, pool.length)] ?? huntMove(race.type);
+			const mob = this.makeMob({
+				id: `${party}-${index}`,
+				species: "muma",
+				x: anchorX + ((index % 5) - 2) * 28,
+				y: anchorY + (Math.floor(index / 5) - 1) * 26,
+				level: Math.max(1, lvl - 1),
+				template: 20,
+				type: race.type,
+				name: summoner ? `Summoner ${name}` : name
+			});
+			mob.witch = true;
+			mob.party = party;
+			mob.summoner = summoner;
+			mob.race = race.id;
+			mob.move = spell.id;
+			mob.hp = mob.max = Math.floor((62 + lvl * 11) * (summoner ? 0.72 : 0.6));
+			mob.speed = 8 + Math.floor(lvl * 0.3) + spell.priority + (summoner ? 0 : 2);
+			mob.aggro = true;
+			mob.huntIn = 0;
+			mob.seen = false;
+			mob.lootKyo = 4 + lvl;
+			this.mobs.push(mob);
+		};
+		for (let i = 0; i < witches; i++) make(false, i);
+		for (let i = 0; i < summoners; i++) make(true, witches + i);
+		this.say(`A witch party. ${witches} witches and ${summoners} summoners. Weaker than a lone huntress. They strike first.`);
+		this.tone(110, .18, "sawtooth");
+	}
+	engagedFoes() {
+		const save = this.save;
+		if (!save) return [];
+		const out = [];
+		for (const m of this.mobs) {
+			if (!m.alive) continue;
+			if (m.animal && m.species !== "wolf" && m.species !== "boar") continue;
+			const move = MOVE_BY_ID[m.move] ?? MOVES[0];
+			const reach = Math.max(52, attackRange(move) * (m.party ? 0.82 : 1));
+			const d = Math.hypot(m.x - save.x, m.y - save.y);
+			const hot = !!(m.party || m.witch || m.aggro || m.hurt > 0 || m.boss);
+			if ((hot && d <= reach) || (!m.animal && d <= reach * 0.8)) out.push(m);
+		}
+		return out;
+	}
+	tickHardcore(dt) {
+		const save = this.save;
+		if (!save || this.dead || this.role === "guest") return;
+		if (this.duel) {
+			this.duel.wait = (this.duel.wait ?? 0) + dt;
+			if (this.duel.wait > 14 && this.duel.phase === "answer") {
+				const guard = MOVE_BY_ID.brace ?? this.arsenal(save).find((m) => reactOf(m) === "guard") ?? MOVES[0];
+				this.resolveExchange(guard);
+			}
+			return;
+		}
+		const foes = this.engagedFoes();
+		if (foes.length) this.openDuel(foes);
+	}
+	openDuel(foes) {
+		const ranked = [...foes].sort((a, b) => {
+			const ma = MOVE_BY_ID[a.move] ?? MOVES[0];
+			const mb = MOVE_BY_ID[b.move] ?? MOVES[0];
+			return (b.speed ?? 0) * 10 + mb.priority * 8 - ((a.speed ?? 0) * 10 + ma.priority * 8);
+		});
+		this.duel = { phase: "answer", queue: ranked, lead: null, moveId: "", beat: "", followers: [], wait: 0 };
+		this.declareLead();
+		this.say("They are in range. Answer before the verse plays. You never open.");
+		this.syncHud(true);
+	}
+	declareLead() {
+		const duel = this.duel;
+		if (!duel) return;
+		duel.wait = 0;
+		while (duel.queue.length && !duel.queue[0].alive) duel.queue.shift();
+		if (!duel.queue.length) {
+			duel.phase = "yours";
+			duel.lead = null;
+			duel.moveId = "";
+			duel.followers = [];
+			duel.beat = "Your verse. The party has spent this round.";
+			this.syncHud(true);
+			return;
+		}
+		const lead = duel.queue.shift();
+		const followers = [];
+		while (followers.length < 2 && duel.queue.length) {
+			const next = duel.queue[0];
+			if (!next?.alive) { duel.queue.shift(); continue; }
+			followers.push(duel.queue.shift());
+		}
+		const move = MOVE_BY_ID[lead.move] ?? MOVES[0];
+		duel.phase = "answer";
+		duel.lead = lead;
+		duel.followers = followers;
+		duel.moveId = move.id;
+		duel.beat = `${lead.name} readies ${move.name}${followers.length ? ` · ${followers.length} more in the beat` : ""}. Choose.`;
+		this.float(lead.x, lead.y - 42, move.name, "#fff1a8");
+		this.syncHud(true);
+	}
+	answerDuel(move) {
+		const save = this.save;
+		const duel = this.duel;
+		if (!save || !duel) {
+			this.say("Walk into their reach. They start the fight.");
+			return;
+		}
+		if (duel.phase === "yours") {
+			const foe = this.engagedFoes().sort((a, b) => a.hp - b.hp)[0];
+			if (!foe) {
+				this.duel = null;
+				this.syncHud(true);
+				return;
+			}
+			this.duelAllow = true;
+			const ok = this.castMove(move, foe);
+			this.duelAllow = false;
+			if (!ok) return;
+			this.defFatigue = Math.max(0, (this.defFatigue ?? 0) - 0.4);
+			const still = this.engagedFoes();
+			if (!still.length) {
+				this.duel = null;
+				this.say("The party breaks.");
+			} else this.openDuel(still);
+			this.syncHud(true);
+			return;
+		}
+		this.resolveExchange(move);
+	}
+	incomingOf(mob) {
+		const move = MOVE_BY_ID[mob.move] ?? MOVES[0];
+		const form = attackForm(move);
+		const pure = form === "spell";
+		const tm = pure ? 1 : typeChart(move.type, this.armorType());
+		let dmg = (4 + mob.level * 1.25 + move.power * (form === "spell" ? .16 : .08)) * (pure ? 1 : tm === 0 ? .2 : tm) * (mob.boss ? 1.35 : 1);
+		if (form === "melee") dmg *= 1.3;
+		else if (form === "ranged") dmg = mitigate(dmg, this.playerArmor());
+		if (mob.party) dmg *= .58;
+		if (mob.summoner) dmg *= .82;
+		dmg *= 1 - Math.min(.45, this.chan("ward") / 160 + (this.buff?.ward ?? 0));
+		return Math.max(1, dmg);
+	}
+	resolveExchange(pMove) {
+		const save = this.save;
+		const duel = this.duel;
+		if (!save || !duel?.lead) return;
+		const lead = duel.lead;
+		const eMove = MOVE_BY_ID[duel.moveId] ?? MOVE_BY_ID[lead.move] ?? MOVES[0];
+		const kind = reactOf(pMove);
+		const fatigue = this.defFatigue ?? 0;
+		let incoming = lead.alive ? this.incomingOf(lead) : 0;
+		for (const f of duel.followers ?? []) if (f?.alive) incoming += this.incomingOf(f) * .4;
+		incoming *= 1 / (1 + Math.min(6, (duel.queue?.length ?? 0) * .12));
+		const fail = Math.random() * 100 < defenseFail(pMove, fatigue);
+		let note = "TRADE";
+		const chip = (mult) => {
+			if (!lead.alive || pMove.power <= 0) return;
+			this.duelAllow = true;
+			this.resolveHit(pMove, lead, false, mult);
+			this.duelAllow = false;
+		};
+		if (lead.summoner && lead.alive && Math.random() < .62 && this.mobs.filter((m) => m.alive && m.master === lead.id).length < 2) {
+			this.spawnPartySpirit(lead);
+			incoming *= .32;
+			note = "SUMMON";
+		}
+		if (kind === "guard") {
+			incoming *= .46;
+			this.defFatigue = Math.max(0, fatigue - .35);
+			note = note === "SUMMON" ? note : "GUARD";
+		} else if (kind === "heal") {
+			incoming *= .8;
+			const heal = 14 + Math.max(8, pMove.power) * .4;
+			save.hp = Math.min(this.maxHp(), save.hp + heal);
+			this.float(save.x, save.y - 52, `+${Math.floor(heal)}`, "#9ad8c8");
+			note = "MEND";
+		} else if (kind === "roll") {
+			this.defFatigue = fatigue + 1;
+			if (fail) {
+				incoming *= 1.3;
+				note = "TRIP";
+			} else {
+				const travel = 30 + Math.random() * 58;
+				const cover = rollCover(travel, attackRange(eMove));
+				incoming *= 1 - cover * .82;
+				if (cover >= .98) incoming = 0;
+				const side = this.facing > 0 ? 1 : -1;
+				this.tryMove(-side * travel * .42, side * Math.min(26, travel * .28));
+				chip(.28 + cover * .12);
+				note = incoming <= 0 ? "CLEAR" : cover > .55 ? "GRAZE" : "CLIP";
+			}
+		} else if (kind === "counter") {
+			this.defFatigue = fatigue + (fail ? 1.2 : .3);
+			if (fail) {
+				incoming *= 1.36;
+				note = "SLIP";
+			} else {
+				incoming *= .12;
+				chip(.58);
+				note = "RIPOSTE";
+				if (Math.random() < .42 && duel.queue?.length) {
+					const skipped = duel.queue.shift();
+					if (skipped) this.float(skipped.x, skipped.y - 28, "STAGGER", "#fff1a8");
+				}
+			}
+		} else if (kind === "move") {
+			this.defFatigue = fatigue + (fail ? 1 : .45);
+			if (fail) {
+				incoming *= 1.16;
+				chip(.2);
+				note = "SNAG";
+			} else {
+				incoming *= .36;
+				if (moveTactic(pMove) === "blink" && lead.alive) {
+					const behind = lead.x >= save.x ? 1 : -1;
+					const nx = lead.x + behind * 28;
+					const ny = lead.y + 4;
+					if (!blocked(this.world, nx, ny)) {
+						save.x = nx;
+						save.y = ny;
+					}
+					this.facing = behind > 0 ? -1 : 1;
+				} else if (lead.alive) this.tryMove((lead.x - save.x) * .25, (lead.y - save.y) * .25);
+				chip(.46);
+				note = "SLIDE";
+			}
+		} else {
+			const mine = pMove.priority * 8 + this.playerSpeed();
+			const theirs = eMove.priority * 8 + (lead.speed ?? 0);
+			if (mine > theirs && Math.random() < .55) {
+				incoming *= .6;
+				note = "CUT IN";
+			}
+			this.defFatigue = Math.max(0, fatigue - .5);
+			chip(moveTactic(pMove) === "heavy" || moveTactic(pMove) === "channel" ? 1.05 : .9);
+		}
+		this.playMoveFx(eMove, lead.x, lead.y - 16, save.x, save.y - 18);
+		this.playMoveFx(pMove, save.x, save.y - 20, lead.x, lead.y - 12);
+		this.float(save.x, save.y - 64, note, "#fff1a8");
+		if (incoming > .75) this.hurtSelf(incoming, eMove.effect);
+		if (attackForm(pMove) === "spell" || moveTactic(pMove) === "channel") this.gainSkill("magic", 4);
+		else this.gainSkill("physical", 3);
+		this.advanceDuel();
+	}
+	advanceDuel() {
+		if (!this.duel) return;
+		if (this.save && this.save.hp <= 0) return;
+		if (!this.engagedFoes().length) {
+			this.duel = null;
+			this.say("The party breaks.");
+			this.syncHud(true);
+			return;
+		}
+		this.declareLead();
+	}
+	spawnPartySpirit(master) {
+		const pool = MONSTERS.filter((d) => d.type === "spirit" || d.type === master.type);
+		const spec = pool[Math.floor(Math.random() * pool.length)] ?? MONSTERS[0];
+		const pet = this.makeMob({
+			id: `summon-${nextUid()}`,
+			species: spec.id,
+			x: master.x + (Math.random() < .5 ? -26 : 26),
+			y: master.y + 16,
+			level: Math.max(1, master.level - 2),
+			template: spec.template,
+			type: spec.type,
+			name: spec.name
+		});
+		pet.master = master.id;
+		pet.party = master.party;
+		pet.aggro = true;
+		pet.hp = pet.max = Math.floor(pet.max * .45);
+		pet.speed = Math.max(6, (pet.speed ?? 8) - 2);
+		this.mobs.push(pet);
+		this.float(master.x, master.y - 46, "SUMMON", "#c9a6e8");
+		this.say(`${master.name} calls ${pet.name}.`);
+	}
+}
 function xpNeed(level) {
 	return Math.floor(28 * Math.pow(1.2, level - 1));
 }

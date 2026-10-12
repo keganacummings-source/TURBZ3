@@ -4,8 +4,11 @@ import { UserButton } from "@/lib/auth/gates";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { RACES, TYPES, type RaceId, type TypeId } from "@/game/content";
 import { loadCloudSave, writeCloudSave } from "@/game/cloud-client";
-import { bindCloud, cloudReady, ingestCloud, noteArena, noteHunt, readArenaLocal } from "@/game/account-save";
+import { bindCloud, cloudReady, ingestCloud, noteArena, noteHardcore, noteHunt, readArenaLocal } from "@/game/account-save";
+import { postGrave } from "@/game/social-client";
+import type { GraveBody } from "@/game/social-types";
 import { ArenaScreen } from "@/components/arena-ui";
+import { Boards, ChatDock, DuelBanner, Hub, Options } from "@/components/hub-ui";
 import { getSnap, subscribe, TurbzGame } from "@/game/engine";
 
 function useSnap() {
@@ -113,7 +116,17 @@ export function ApiGate() {
   );
 }
 
+function veilName(user: { id: string; displayName?: string | null; primaryEmail?: string | null }): string {
+  const raw = (user.displayName || user.primaryEmail || "witch").split("@")[0] ?? "witch";
+  const cleaned = raw.replace(/[^a-zA-Z0-9_]/g, "").slice(0, 16);
+  if (cleaned.length >= 3) return cleaned;
+  const tail = user.id.replace(/[^a-zA-Z0-9]/g, "").slice(0, 12);
+  return `w${tail}`.slice(0, 16);
+}
+
 function Hunt() {
+  const auth = useCurrentUserState();
+  const username = auth.user ? veilName(auth.user) : "witch";
   const snap = useSnap();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const gameRef = useRef<TurbzGame | null>(null);
@@ -123,7 +136,7 @@ function Hunt() {
   const [code, setCode] = useState("");
   const [intent, setIntent] = useState<"solo" | "host" | "join">("solo");
   const [chat, setChat] = useState("");
-  const [circle, setCircle] = useState(false);
+  const [screen, setScreen] = useState<"hub" | "hunt" | "circle" | "hard" | "boards" | "options">("hub");
   const [arenaSeed, setArenaSeed] = useState<unknown>(null);
   const [booted, setBooted] = useState(false);
 
@@ -139,10 +152,16 @@ function Hunt() {
     gameRef.current = game;
     game.attachCloud((json) => {
       try {
-        noteHunt(JSON.parse(json) as unknown);
+        const parsed = JSON.parse(json) as { slot?: string; save?: unknown };
+        if (parsed && parsed.slot === "hardcore") noteHardcore(parsed.save);
+        else if (parsed && parsed.slot === "hunt") noteHunt(parsed.save);
+        else noteHunt(parsed);
       } catch {
         /* keep the local hunt */
       }
+    });
+    game.attachGrave((body: GraveBody) => {
+      void postGrave(body).catch(() => {});
     });
     game.start();
     bindCloud((json) => {
@@ -154,6 +173,7 @@ function Hunt() {
           try {
             const split = ingestCloud(JSON.parse(text) as unknown);
             if (split.hunt && typeof split.hunt === "object") game.rememberCloud(split.hunt);
+            if (split.hardcore && typeof split.hardcore === "object") game.rememberHard(split.hardcore);
             setArenaSeed(split.arena);
           } catch {
             setArenaSeed(readArenaLocal());
@@ -174,11 +194,30 @@ function Hunt() {
     <main className="game-root">
       <canvas ref={canvasRef} className="game-canvas" aria-label="TURBZ wilds" />
       <div className="overlay">
-        {snap.mode !== "play" && !create && !circle && (
+        <ChatDock username={username} playing={snap.mode === "play" && screen !== "hub"} />
+        {screen === "hub" && snap.mode !== "play" && (
+          <Hub
+            username={username}
+            onHunt={() => {
+              g()?.swapRules("hunt");
+              setScreen("hunt");
+            }}
+            onCircle={() => setScreen("circle")}
+            onHard={() => {
+              g()?.swapRules("hardcore");
+              setScreen("hard");
+            }}
+            onBoards={() => setScreen("boards")}
+            onOptions={() => setScreen("options")}
+          />
+        )}
+        {(screen === "hunt" || screen === "hard") && snap.mode !== "play" && !create && (
           <Title
+            kind={screen === "hard" ? "hard" : "hunt"}
             hasSave={snap.hasSave}
             code={code}
             setCode={setCode}
+            onBack={() => setScreen("hub")}
             onNew={() => {
               setIntent("solo");
               setCreate(true);
@@ -206,10 +245,10 @@ function Hunt() {
                 ? Number((arenaSeed as { points: number }).points)
                 : null
             }
-            onCircle={() => setCircle(true)}
+            onCircle={() => setScreen("circle")}
           />
         )}
-        {snap.mode !== "play" && create && (
+        {(screen === "hunt" || screen === "hard") && snap.mode !== "play" && create && (
           <Create
             name={name}
             setName={setName}
@@ -227,8 +266,21 @@ function Hunt() {
             }}
           />
         )}
-        {snap.mode === "play" && !circle && <Play snap={snap} game={g()} chat={chat} setChat={setChat} />}
-        {circle && <ArenaScreen seed={arenaSeed} onClose={() => setCircle(false)} onCloud={onArenaCloud} />}
+        {snap.mode === "play" && screen !== "circle" && screen !== "boards" && screen !== "options" && (
+          <Play snap={snap} game={g()} chat={chat} setChat={setChat} />
+        )}
+        {screen === "circle" && (
+          <ArenaScreen
+            seed={arenaSeed}
+            onClose={() => setScreen("hub")}
+            onCloud={onArenaCloud}
+            onGrave={(body) => {
+              void postGrave(body).catch(() => {});
+            }}
+          />
+        )}
+        {screen === "boards" && snap.mode !== "play" && <Boards onBack={() => setScreen("hub")} />}
+        {screen === "options" && snap.mode !== "play" && <Options username={username} onBack={() => setScreen("hub")} />}
       </div>
     </main>
   );
@@ -240,9 +292,11 @@ function makeCode(): string {
 }
 
 function Title(props: {
+  kind: "hunt" | "hard";
   hasSave: boolean;
   code: string;
   setCode: (v: string) => void;
+  onBack: () => void;
   onNew: () => void;
   onContinue: () => void;
   onHost: () => void;
@@ -251,50 +305,61 @@ function Title(props: {
   circleMarks: number | null;
   onCircle: () => void;
 }) {
+  const hard = props.kind === "hard";
   return (
     <div className="flex h-full items-center justify-center overflow-auto p-3 pb-20">
       <div className="screen-card px-panel my-auto w-full max-w-xl p-4 sm:p-5">
-        <p className="font-display text-xs text-blood">TURBO ENGINE · V3</p>
-        <h1 className="font-display mt-3 text-lg text-bone sm:text-2xl">TURBZ</h1>
+        <p className="font-display text-xs text-blood">{hard ? "HARDCORE" : "TURBOHUNT"}</p>
+        <h1 className="font-display mt-3 text-lg text-bone sm:text-2xl">{hard ? "Skill grind" : "The hunt"}</h1>
         <p className="mt-3 text-dim">
-          You are signed in to TURBZ API. Die and you must choose a new witch. A finished set of her blood can be worn again. Otherwise you wake in the default robes, at another tavern, beside the bounty board.
+          {hard
+            ? "Open wilds. Skills climb faster than the body. Witch parties are weaker than a lone huntress, two to ten witches and one to five summoners. They strike first. You answer before the verse lands."
+            : "Die and you must choose a new witch. A finished set of her blood can be worn again. Otherwise you wake in the default robes, at another tavern, beside the bounty board."}
         </p>
         <div className="mt-5 grid gap-2">
           <button className="px-btn px-btn-kyo" onClick={props.onNew}>
-            New Hunt
+            {hard ? "New hardcore witch" : "New Hunt"}
           </button>
           <button className="px-btn" disabled={!props.hasSave} onClick={props.onContinue}>
             Continue
           </button>
-          <button className="px-btn" disabled={!props.circleReady} onClick={props.onCircle}>
-            {props.circleMarks != null && props.circleMarks > 0 ? `Witch Circle · ${props.circleMarks}` : "Witch Circle"}
+          {!hard && (
+            <button className="px-btn" disabled={!props.circleReady} onClick={props.onCircle}>
+              {props.circleMarks != null && props.circleMarks > 0 ? `Witch Circle · ${props.circleMarks}` : "Witch Circle"}
+            </button>
+          )}
+          <button className="px-btn" onClick={props.onBack}>
+            Back to the veil
           </button>
         </div>
-        <div className="mt-5 border-t-2 border-bone pt-4">
-          <p className="font-display text-xs text-kyo">Lobby code</p>
-          <p className="text-dim">Same code finds another signed-in witch.</p>
-          <input
-            value={props.code}
-            onChange={(e) => props.setCode(e.target.value.toUpperCase().slice(0, 6))}
-            placeholder="CODE"
-            aria-label="Lobby code"
-            autoComplete="off"
-            suppressHydrationWarning
-            className="mt-2 w-full border-2 border-bone bg-ink px-3 py-2 font-display text-xs text-bone outline-none"
-          />
-          <div className="mt-2 grid grid-cols-2 gap-2">
-            <button className="px-btn" onClick={props.onHost}>
-              Create
-            </button>
-            <button className="px-btn" onClick={props.onJoin}>
-              Join
-            </button>
+        {!hard && (
+          <div className="mt-5 border-t-2 border-bone pt-4">
+            <p className="font-display text-xs text-kyo">Lobby code</p>
+            <p className="text-dim">Same code finds another signed-in witch.</p>
+            <input
+              value={props.code}
+              onChange={(e) => props.setCode(e.target.value.toUpperCase().slice(0, 6))}
+              placeholder="CODE"
+              aria-label="Lobby code"
+              autoComplete="off"
+              suppressHydrationWarning
+              className="mt-2 w-full border-2 border-bone bg-ink px-3 py-2 font-display text-xs text-bone outline-none"
+            />
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <button className="px-btn" onClick={props.onHost}>
+                Create
+              </button>
+              <button className="px-btn" onClick={props.onJoin}>
+                Join
+              </button>
+            </div>
           </div>
-        </div>
+        )}
         <p className="mt-4 text-dim">
-          Witch Circle is six against six. Weapons, spells, and the occasional summoner. Marks are the only lives, and that save is not the hunt.
+          {hard
+            ? "Counters, steps, and rolls can slip. A long roll can clear a blow. Spamming them only chips, and then you trip. Strike when it is your verse."
+            : "Right-click for menus. Walk into a node to harvest it. Click a keeper only when you are already near."}
         </p>
-        <p className="mt-2 text-dim">Right-click for menus. Walk into a node to harvest it. Click a keeper only when you are already near.</p>
       </div>
     </div>
   );
@@ -423,6 +488,7 @@ function Play({
         </form>
       </div>
       {snap.hint && !snap.menu && !snap.panel && <div className="hint-chip px-panel">{snap.hint}</div>}
+      {snap.duel && <DuelBanner duel={snap.duel} />}
       {snap.menu && (
         <div
           className="ctx-menu px-panel"
@@ -467,7 +533,7 @@ function Play({
         type="button"
         onClick={() => game?.toggleAutoplay()}
       >
-        {snap.autoplay ? "Stop auto" : "Autoplay"}
+        {snap.autoplay ? (snap.rules === "hardcore" ? "Stop grind" : "Stop auto") : snap.rules === "hardcore" ? "Grind nodes" : "Autoplay"}
       </button>
       <button className="menu-fab px-btn" type="button" onClick={() => game?.openShell(Math.max(8, window.innerWidth - 340), Math.max(8, window.innerHeight - 460))}>
         Menu

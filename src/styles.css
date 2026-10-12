@@ -172,6 +172,60 @@
   white-space: nowrap;
 }
 
+.veil-chat {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 24;
+  width: min(320px, calc(100vw - 16px));
+  max-height: min(320px, 48dvh);
+  overflow: auto;
+  padding: 8px;
+}
+
+.veil-chat-play {
+  top: 8px;
+  right: 8px;
+  width: min(280px, calc(100vw - 16px));
+}
+
+.veil-log {
+  max-height: 140px;
+  overflow: auto;
+}
+
+.duel-banner {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 118px;
+  z-index: 20;
+  max-width: 640px;
+  padding: 8px 10px;
+}
+
+.grave-list {
+  display: grid;
+  gap: 6px;
+  max-height: min(420px, 50dvh);
+  overflow: auto;
+}
+
+.grave-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 2px solid var(--color-bone);
+  background: var(--color-ink);
+  color: var(--color-bone);
+  padding: 6px 8px;
+}
+
+.grave-row-on {
+  border-color: var(--color-kyo);
+  box-shadow: 3px 3px 0 var(--color-blood);
+}
+
 .panel-drawer {
   position: absolute;
   top: 8px;

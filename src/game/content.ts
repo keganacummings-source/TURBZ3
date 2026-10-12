@@ -86,6 +86,8 @@ export function typeMult(atk: TypeId, def: TypeId): number {
 
 export type AttackForm = "melee" | "ranged" | "spell";
 
+export type ReactKind = "strike" | "counter" | "move" | "roll" | "guard" | "heal";
+
 export type Move = {
   id: string;
   name: string;
@@ -99,6 +101,10 @@ export type Move = {
   range: number;
   about: string;
   tactic?: Tactic;
+  /** How the verse answers an incoming blow in a duel. */
+  react?: ReactKind;
+  /** Base slip chance for counters, steps, and rolls. Fatigue stacks on top. */
+  fail?: number;
 };
 
 export type Tactic = "strike" | "blink" | "ward" | "lunge" | "heavy" | "channel" | "heal" | "roll";
@@ -108,6 +114,30 @@ export function moveTactic(m: Move): Tactic {
   if (m.effect === "mend") return "heal";
   if (m.effect === "shell") return "ward";
   return "strike";
+}
+
+export function reactOf(m: Move): ReactKind {
+  if (m.react) return m.react;
+  const tactic = moveTactic(m);
+  if (tactic === "roll") return "roll";
+  if (tactic === "blink" || tactic === "lunge") return "move";
+  if (tactic === "ward") return "guard";
+  if (tactic === "heal") return "heal";
+  return "strike";
+}
+
+/** Slip chance. Strikes, guards, and heals do not slip. Fatigue is stacked defensive answers. */
+export function defenseFail(m: Move, fatigue: number): number {
+  const kind = reactOf(m);
+  if (kind === "strike" || kind === "guard" || kind === "heal") return 0;
+  const base = m.fail ?? (kind === "counter" ? 36 : kind === "move" ? 24 : 14);
+  return Math.min(82, Math.round(base + Math.max(0, fatigue) * 14));
+}
+
+/** 0 eats the blow. 1 is clear of it. Reach is the incoming attack. */
+export function rollCover(traveled: number, reach: number): number {
+  const need = Math.max(40, reach * 0.38);
+  return Math.max(0, Math.min(1, traveled / need));
 }
 
 export const MOVES: Move[] = [
@@ -146,18 +176,58 @@ export const MOVES: Move[] = [
   { id: "marrow", name: "Marrow Drain", type: "normal", power: 34, accuracy: 95, crit: 6, priority: 1, effect: "leech", anim: ["beam", "orbit"], range: 70, about: "Takes the warmth out of a rib." },
   { id: "measured", name: "Measured Strike", type: "normal", power: 30, accuracy: 100, crit: 5, priority: 2, effect: "none", anim: ["slash"], range: 48, about: "Clean tempo. Nothing wasted." },
   { id: "shell", name: "Urn Shell", type: "water", power: 18, accuracy: 100, crit: 0, priority: 2, effect: "shell", anim: ["shield", "rain"], range: 40, about: "A wet ward.", tactic: "ward" },
-  { id: "veilstep", name: "Veil Step", type: "void", power: 28, accuracy: 100, crit: 10, priority: 3, effect: "none", anim: ["orbit", "slash"], range: 170, about: "Blink behind them and cut.", tactic: "blink" },
-  { id: "backbite", name: "Backbite", type: "ghoul", power: 34, accuracy: 96, crit: 18, priority: 2, effect: "leech", anim: ["slash", "orbit"], range: 160, about: "Appear at their spine and drink.", tactic: "blink" },
-  { id: "aegis", name: "Three-Ward", type: "light", power: 0, accuracy: 100, crit: 0, priority: 3, effect: "shell", anim: ["shield"], range: 40, about: "No incoming harm for three seconds.", tactic: "ward" },
-  { id: "icecrown", name: "Ice Crown", type: "ice", power: 0, accuracy: 100, crit: 0, priority: 3, effect: "shell", anim: ["prism", "shield"], range: 40, about: "Three seconds of glass.", tactic: "ward" },
-  { id: "lunge", name: "Reed Lunge", type: "air", power: 40, accuracy: 92, crit: 14, priority: 2, effect: "none", anim: ["slash"], range: 130, about: "Dash in, strike, spring back.", tactic: "lunge" },
-  { id: "pyrelunge", name: "Pyre Lunge", type: "fire", power: 48, accuracy: 88, crit: 16, priority: 1, effect: "burn", anim: ["slash", "spark"], range: 140, about: "A burning dash, then a retreat.", tactic: "lunge" },
+  { id: "veilstep", name: "Veil Step", type: "void", power: 16, accuracy: 100, crit: 10, priority: 3, effect: "none", anim: ["orbit", "slash"], range: 170, about: "A short blink and a nick. It slips if you spam it.", tactic: "blink", react: "move", fail: 24 },
+  { id: "backbite", name: "Backbite", type: "ghoul", power: 18, accuracy: 96, crit: 18, priority: 2, effect: "leech", anim: ["slash", "orbit"], range: 160, about: "A sip from the spine. Not a feast.", tactic: "blink", react: "move", fail: 28 },
+  { id: "aegis", name: "Three-Ward", type: "light", power: 0, accuracy: 100, crit: 0, priority: 3, effect: "shell", anim: ["shield"], range: 40, about: "No incoming harm for three seconds.", tactic: "ward", react: "guard" },
+  { id: "icecrown", name: "Ice Crown", type: "ice", power: 0, accuracy: 100, crit: 0, priority: 3, effect: "shell", anim: ["prism", "shield"], range: 40, about: "Three seconds of glass.", tactic: "ward", react: "guard" },
+  { id: "lunge", name: "Reed Lunge", type: "air", power: 26, accuracy: 90, crit: 12, priority: 2, effect: "none", anim: ["slash"], range: 130, about: "Dash in, nick, spring back. It can snag.", tactic: "lunge", react: "move", fail: 20 },
+  { id: "pyrelunge", name: "Pyre Lunge", type: "fire", power: 30, accuracy: 86, crit: 14, priority: 1, effect: "burn", anim: ["slash", "spark"], range: 140, about: "A burning step that only chips.", tactic: "lunge", react: "move", fail: 22 },
   { id: "hammer", name: "Grave Hammer", type: "earth", power: 78, accuracy: 78, crit: 8, priority: 0, effect: "root", anim: ["burst", "pulse"], range: 52, about: "A heavy windup. You cannot weave through it.", tactic: "heavy" },
   { id: "hymn", name: "Chapel Hymn", type: "light", power: 66, accuracy: 90, crit: 8, priority: 0, effect: "expose", anim: ["beam", "prism"], range: 160, about: "A cast. Other verses wait.", tactic: "channel" },
   { id: "voidhymn", name: "Void Hymn", type: "void", power: 72, accuracy: 84, crit: 12, priority: 0, effect: "gloom", anim: ["orbit", "pulse"], range: 170, about: "The long note. Your hands are busy.", tactic: "channel" },
-  { id: "roll", name: "Salt Roll", type: "normal", power: 0, accuracy: 100, crit: 0, priority: 3, effect: "none", anim: ["spiral"], range: 80, about: "Roll aside. Blows miss.", tactic: "roll" },
-  { id: "briaroll", name: "Briar Roll", type: "earth", power: 16, accuracy: 100, crit: 6, priority: 3, effect: "none", anim: ["spiral", "slash"], range: 90, about: "Roll through thorns and nick them.", tactic: "roll" },
-  { id: "tidemend", name: "Tide Mend", type: "water", power: 28, accuracy: 100, crit: 0, priority: 2, effect: "mend", anim: ["rain", "shield"], range: 40, about: "Drink the fight back.", tactic: "heal" },
+  { id: "roll", name: "Salt Roll", type: "normal", power: 0, accuracy: 100, crit: 0, priority: 3, effect: "none", anim: ["spiral"], range: 80, about: "Distance decides the blow. Spam and you trip.", tactic: "roll", react: "roll", fail: 16 },
+  { id: "briaroll", name: "Briar Roll", type: "earth", power: 10, accuracy: 100, crit: 6, priority: 3, effect: "none", anim: ["spiral", "slash"], range: 90, about: "A thorn nick on the way through. Not a kill.", tactic: "roll", react: "roll", fail: 18 },
+  { id: "tidemend", name: "Tide Mend", type: "water", power: 28, accuracy: 100, crit: 0, priority: 2, effect: "mend", anim: ["rain", "shield"], range: 40, about: "Drink the fight back.", tactic: "heal", react: "heal" },
+  { id: "riposte", name: "Salt Riposte", type: "normal", power: 24, accuracy: 100, crit: 16, priority: 3, effect: "none", anim: ["slash", "spark"], range: 48, about: "Catch the blade and return a chip. It slips often.", tactic: "strike", react: "counter", fail: 36 },
+  { id: "glassparry", name: "Glass Parry", type: "ice", power: 22, accuracy: 100, crit: 20, priority: 3, effect: "expose", anim: ["prism", "slash"], range: 52, about: "A cold answer. Fail and the glass is yours.", tactic: "strike", react: "counter", fail: 38 },
+  { id: "thornanswer", name: "Thorn Answer", type: "earth", power: 26, accuracy: 96, crit: 10, priority: 2, effect: "root", anim: ["spiral", "slash"], range: 56, about: "Roots bite the striker if you do not slip.", tactic: "strike", react: "counter", fail: 34 },
+  { id: "ashcounter", name: "Ash Counter", type: "fire", power: 28, accuracy: 94, crit: 14, priority: 2, effect: "burn", anim: ["spark", "burst"], range: 60, about: "A cinder flicked back. Small, mean, unreliable.", tactic: "strike", react: "counter", fail: 40 },
+  { id: "voidrebuke", name: "Void Rebuke", type: "void", power: 20, accuracy: 100, crit: 12, priority: 3, effect: "gloom", anim: ["orbit", "pulse"], range: 70, about: "Turn their note inside out.", tactic: "strike", react: "counter", fail: 36 },
+  { id: "lanternvault", name: "Lantern Vault", type: "light", power: 14, accuracy: 100, crit: 8, priority: 3, effect: "none", anim: ["beam", "spiral"], range: 150, about: "Leap the blow and tap them with the lantern.", tactic: "blink", react: "move", fail: 22 },
+  { id: "tideslip", name: "Tide Slip", type: "water", power: 12, accuracy: 100, crit: 6, priority: 3, effect: "soak", anim: ["rain", "spiral"], range: 120, about: "Slide under the swing. Salt on the way out.", tactic: "lunge", react: "move", fail: 20 },
+  { id: "crowhop", name: "Crow Hop", type: "air", power: 14, accuracy: 100, crit: 12, priority: 3, effect: "none", anim: ["spiral", "slash"], range: 140, about: "A bird-step. The nick is a feather.", tactic: "blink", react: "move", fail: 18 },
+  { id: "gravepounce", name: "Grave Pounce", type: "ghoul", power: 22, accuracy: 88, crit: 16, priority: 2, effect: "leech", anim: ["slash", "orbit"], range: 130, about: "In, bite, out. The bite is a sip.", tactic: "lunge", react: "move", fail: 26 },
+  { id: "ashstep", name: "Ash Step", type: "fire", power: 16, accuracy: 92, crit: 10, priority: 2, effect: "burn", anim: ["spark", "spiral"], range: 136, about: "Leave a coal where you were.", tactic: "blink", react: "move", fail: 24 },
+  { id: "cindertumble", name: "Cinder Tumble", type: "fire", power: 8, accuracy: 100, crit: 4, priority: 3, effect: "none", anim: ["spark", "spiral"], range: 88, about: "Roll through coals. Distance or a scorch.", tactic: "roll", react: "roll", fail: 16 },
+  { id: "frostskate", name: "Frost Skate", type: "ice", power: 6, accuracy: 100, crit: 8, priority: 3, effect: "none", anim: ["prism", "spiral"], range: 110, about: "Skate the length of the blow.", tactic: "roll", react: "roll", fail: 12 },
+  { id: "widowtumble", name: "Widow Tumble", type: "void", power: 8, accuracy: 100, crit: 6, priority: 3, effect: "gloom", anim: ["orbit", "spiral"], range: 96, about: "A black roll. Far enough and the hymn misses.", tactic: "roll", react: "roll", fail: 18 },
+  { id: "brace", name: "Bone Brace", type: "normal", power: 0, accuracy: 100, crit: 0, priority: 3, effect: "shell", anim: ["shield"], range: 40, about: "Eat the hit on purpose. No slip. No chip.", tactic: "ward", react: "guard" },
+  { id: "choirbell", name: "Choir Bell", type: "light", power: 58, accuracy: 88, crit: 10, priority: 1, effect: "expose", anim: ["pulse", "prism", "burst"], range: 150, about: "A bell that staggers the ring.", tactic: "channel" },
+  { id: "marrowcomet", name: "Marrow Comet", type: "ghoul", power: 62, accuracy: 82, crit: 14, priority: 0, effect: "leech", anim: ["beam", "burst", "orbit"], range: 160, about: "A rib torn into a comet.", tactic: "channel" },
+  { id: "stormlattice", name: "Storm Lattice", type: "electric", power: 48, accuracy: 90, crit: 12, priority: 2, effect: "spark", anim: ["spark", "beam", "burst"], range: 155, about: "A cage of lightning. It jumps.", tactic: "strike" },
+  { id: "briarcathedral", name: "Briar Cathedral", type: "earth", power: 54, accuracy: 86, crit: 8, priority: 0, effect: "root", anim: ["spiral", "burst", "slash"], range: 90, about: "The garden stands up and grabs.", tactic: "heavy" },
+  { id: "solarguillotine", name: "Solar Guillotine", type: "fire", power: 70, accuracy: 76, crit: 18, priority: 0, effect: "burn", anim: ["slash", "burst", "spark"], range: 64, about: "One bright cut. The windup is honest.", tactic: "heavy" },
+  { id: "tidecourt", name: "Tide Court", type: "water", power: 46, accuracy: 92, crit: 8, priority: 1, effect: "soak", anim: ["rain", "spiral", "pulse"], range: 140, about: "A court of waves sits on them.", tactic: "strike" },
+  { id: "whiteprocession", name: "White Procession", type: "ice", power: 44, accuracy: 94, crit: 10, priority: 1, effect: "sleep", anim: ["prism", "rain", "orbit"], range: 130, about: "Saints of frost walk through the lane.", tactic: "strike" },
+  { id: "hexcarousel", name: "Hex Carousel", type: "void", power: 42, accuracy: 90, crit: 16, priority: 1, effect: "spark", anim: ["orbit", "spark", "beam"], range: 135, about: "Hexes ride a wheel and hop once.", tactic: "strike" },
+  { id: "bansheereel", name: "Banshee Reel", type: "air", power: 40, accuracy: 96, crit: 12, priority: 3, effect: "gloom", anim: ["spiral", "slash", "orbit"], range: 145, about: "A dancing cut that arrives early.", tactic: "strike" },
+  { id: "gravewaltz", name: "Grave Waltz", type: "spirit", power: 38, accuracy: 94, crit: 14, priority: 2, effect: "leech", anim: ["orbit", "slash", "pulse"], range: 100, about: "Three steps, one sip.", tactic: "lunge", react: "move", fail: 22 },
+  { id: "lanternrain", name: "Lantern Rain", type: "light", power: 36, accuracy: 100, crit: 8, priority: 1, effect: "expose", anim: ["beam", "rain", "spark"], range: 150, about: "Votives fall in a line.", tactic: "strike" },
+  { id: "kilnbreath", name: "Kiln Breath", type: "fire", power: 50, accuracy: 88, crit: 10, priority: 1, effect: "burn", anim: ["burst", "spark", "beam"], range: 120, about: "The kiln exhales.", tactic: "strike" },
+  { id: "saltcathedral", name: "Salt Cathedral", type: "water", power: 18, accuracy: 100, crit: 0, priority: 2, effect: "mend", anim: ["rain", "shield", "pulse"], range: 40, about: "A chapel of brine knits you.", tactic: "heal", react: "heal" },
+  { id: "focuslance", name: "Focus Lance", type: "light", power: 36, accuracy: 100, crit: 22, priority: 3, effect: "expose", anim: ["beam", "spark"], range: 150, about: "A fast lance. It can speak before theirs.", tactic: "strike" },
+  { id: "interrupt", name: "Veil Interrupt", type: "void", power: 22, accuracy: 100, crit: 8, priority: 4, effect: "silence", anim: ["orbit", "beam"], range: 130, about: "Cut their verse. Yours is small on purpose.", tactic: "strike" },
+  { id: "packfear", name: "Pack Fear", type: "spirit", power: 18, accuracy: 100, crit: 4, priority: 2, effect: "gloom", anim: ["orbit", "pulse"], range: 160, about: "The ring flinches. Little damage, long chill.", tactic: "strike" },
+  { id: "summonbell", name: "Summon Bell", type: "void", power: 12, accuracy: 100, crit: 4, priority: 1, effect: "none", anim: ["orbit", "pulse", "spark"], range: 80, about: "A bell for things that should stay buried.", tactic: "channel" },
+  { id: "bloodstep", name: "Blood Step", type: "ghoul", power: 20, accuracy: 92, crit: 14, priority: 2, effect: "leech", anim: ["slash", "orbit", "burst"], range: 110, about: "Step through them and keep a drop.", tactic: "blink", react: "move", fail: 26 },
+  { id: "mirrorward", name: "Mirror Ward", type: "ice", power: 8, accuracy: 100, crit: 6, priority: 3, effect: "shell", anim: ["prism", "shield", "spark"], range: 70, about: "A pane that answers with a shard.", tactic: "ward", react: "counter", fail: 32 },
+  { id: "hearthline", name: "Hearth Line", type: "fire", power: 34, accuracy: 96, crit: 8, priority: 1, effect: "burn", anim: ["beam", "spark"], range: 125, about: "A straight road of coals.", tactic: "strike" },
+  { id: "moonhook", name: "Moon Hook", type: "air", power: 32, accuracy: 94, crit: 18, priority: 2, effect: "none", anim: ["slash", "spiral"], range: 78, about: "A hooked cut that lifts them.", tactic: "strike" },
+  { id: "ossuary", name: "Ossuary Drum", type: "normal", power: 44, accuracy: 90, crit: 8, priority: 0, effect: "spark", anim: ["burst", "pulse", "slash"], range: 88, about: "The floor keeps time and then hits.", tactic: "heavy" },
+  { id: "rimespire", name: "Rime Spire", type: "ice", power: 52, accuracy: 84, crit: 16, priority: 1, effect: "root", anim: ["prism", "beam", "burst"], range: 120, about: "A spire from under their heel.", tactic: "strike" },
+  { id: "widowfan", name: "Widow Fan", type: "void", power: 30, accuracy: 100, crit: 10, priority: 2, effect: "gloom", anim: ["orbit", "slash", "rain"], range: 100, about: "A fan of black silk. It touches twice in the eye.", tactic: "strike" },
+  { id: "chapelwheel", name: "Chapel Wheel", type: "light", power: 40, accuracy: 92, crit: 12, priority: 1, effect: "expose", anim: ["prism", "spiral", "burst"], range: 110, about: "A wheel of saints. Pretty, and unkind.", tactic: "strike" },
+  { id: "brinecloak", name: "Brine Cloak", type: "water", power: 0, accuracy: 100, crit: 0, priority: 3, effect: "shell", anim: ["rain", "shield"], range: 40, about: "Salt on the shoulders. The next blow is smaller.", tactic: "ward", react: "guard" },
 ];
 
 export const MOVE_BY_ID: Record<string, Move> = Object.fromEntries(MOVES.map((m) => [m.id, m]));

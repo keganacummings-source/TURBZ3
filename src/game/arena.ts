@@ -24,6 +24,7 @@ import {
   type TypeId,
   typeMult,
 } from "./content";
+import type { GraveBody } from "./social-types";
 import { drawActor, drawMonster, drawShadowName } from "./sprites";
 
 const TILE = 32;
@@ -177,6 +178,8 @@ type Fighter = {
   second: boolean;
   usedSecond: boolean;
   tokened: boolean;
+  buried: boolean;
+  grave: GraveBody | null;
   think: number;
   stuck: number;
   lastX: number;
@@ -205,6 +208,29 @@ function ench(gear: Gear[], id: string): number {
   let n = 0;
   for (const g of gear) for (const e of g.enchants) if (e.id === id) n += e.power;
   return n;
+}
+
+function graveOf(w: ArenaWitch): GraveBody {
+  const all = [w.weapon, ...w.gear];
+  return {
+    mode: "arena",
+    score: powerOf(w),
+    name: w.name,
+    race: RACES.find((r) => r.id === w.race)?.name ?? w.race,
+    level: w.level,
+    accountScore: 0,
+    skills: [{ name: w.role === "summoner" ? "Summoning" : "Circle", level: w.level }],
+    gear: all.map((g) => ({
+      slot: g.slot,
+      name: g.name,
+      level: g.level,
+      quality: g.quality,
+      type: TYPES[g.type]?.name ?? g.type,
+      enchants: g.enchants.map((e) => ({ name: ENCHANT_BY_ID[e.id]?.name ?? e.id, power: e.power })),
+      moves: (g.moves ?? []).map((id) => MOVE_BY_ID[id]?.name ?? id),
+    })),
+    note: w.role === "summoner" ? `Summoner. Spirits: ${w.spirits.map((s) => s.name).join(", ") || "none"}.` : "Witch of the circle.",
+  };
 }
 
 function powerOf(w: ArenaWitch): number {
@@ -580,6 +606,8 @@ export class WitchArena {
   age = 0;
   clock = 0;
   onCloud: (save: ArenaSave | null) => void = () => {};
+  onGrave: (body: GraveBody) => void = () => {};
+  private buriedKeys = new Set<string>();
   private running = false;
   private raf = 0;
   private lastT = 0;
@@ -657,6 +685,7 @@ export class WitchArena {
   }
 
   fresh(): void {
+    this.buriedKeys.clear();
     const rng = mulberry32((Date.now() ^ ((Math.random() * 1e9) | 0)) >>> 0 || 1);
     const roster = [0, 1, 2, 3, 4, 5].map(() => rollWitch(rng));
     this.save = {
@@ -786,6 +815,7 @@ export class WitchArena {
     body.double = ench(gear, "double_strike");
     body.second = ench(gear, "second_chance") > 0;
     this.fighters.push(body);
+    if (side === 0) body.grave = graveOf(w);
     if (w.role !== "summoner") return;
     w.spirits.forEach((s, i) => {
       const sx = tx + (side === 0 ? 2 : -2);
@@ -879,6 +909,8 @@ export class WitchArena {
       second: false,
       usedSecond: false,
       tokened: false,
+      buried: false,
+      grave: null,
       think: Math.random() * 0.3,
       stuck: 0,
       lastX: tx * TILE,
@@ -1215,6 +1247,14 @@ export class WitchArena {
     }
     f.hp = 0;
     f.alive = false;
+    if (f.grave && !f.buried) {
+      f.buried = true;
+      const key = `${f.grave.name}:${f.grave.level}:${f.grave.note}`;
+      if (!this.buriedKeys.has(key)) {
+        this.buriedKeys.add(key);
+        this.onGrave(f.grave);
+      }
+    }
     if (f.role !== "spirit") {
       for (const s of this.fighters) {
         if (s.master === f.id && s.alive) {
@@ -1260,6 +1300,13 @@ export class WitchArena {
     else save.losses += 1;
     const tokens = this.gained;
     if (save.points <= 0) {
+      for (const w of save.roster) {
+        const g = graveOf(w);
+        const key = `${g.name}:${g.level}:${g.note}`;
+        if (this.buriedKeys.has(key)) continue;
+        this.buriedKeys.add(key);
+        this.onGrave(g);
+      }
       this.last = { win: false, tokens, note: "No marks left. The circle forgets this coven." };
       this.phase = "over";
       this.note = this.last.note;
