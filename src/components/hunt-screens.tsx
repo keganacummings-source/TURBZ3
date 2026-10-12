@@ -59,7 +59,7 @@ export function Create(props: {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !props.game) return;
-    props.game.preview(canvas, props.race);
+    try { props.game.preview(canvas, props.race); } catch { /* optional */ }
   }, [props.game, props.race]);
   return (
     <div className="flex h-full items-center justify-center overflow-auto p-3 pb-20">
@@ -128,7 +128,28 @@ function Panel({ title, onClose, children }: { title: string; onClose: () => voi
         <p className="font-display text-xs text-kyo uppercase">{title}</p>
         <button className="px-btn text-xs" type="button" onClick={onClose}>Close</button>
       </div>
-      <div className="max-h-[60dvh] overflow-auto">{children}</div>
+      <div className="max-h-[70dvh] overflow-auto">{children}</div>
+    </div>
+  );
+}
+
+function MiniMap({ game }: { game: TurbzGame | null }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const c = ref.current;
+    if (!c || !game) return;
+    const paint = () => { try { game.drawMap(c); } catch { /* loading */ } };
+    paint();
+    const id = window.setInterval(paint, 500);
+    return () => clearInterval(id);
+  }, [game]);
+  return (
+    <div className="grid gap-2">
+      <p className="font-display text-xs text-kyo">World map</p>
+      <p className="text-dim text-xs">You (triangle) · gold = arena · violet = rift · red = world boss · green = resource · pink = enemy witch</p>
+      <div className="overflow-auto rounded border border-black/40 bg-black/40">
+        <canvas ref={ref} width={560} height={360} className="mx-auto block max-h-[min(60dvh,420px)] w-full max-w-full" style={{ imageRendering: "pixelated" }} />
+      </div>
     </div>
   );
 }
@@ -136,11 +157,14 @@ function Panel({ title, onClose, children }: { title: string; onClose: () => voi
 function Rebirth({ snap, game }: { snap: ReturnType<typeof getSnap>; game: TurbzGame | null }) {
   const [name, setName] = useState(snap.name || "Huntress");
   const [race, setRace] = useState<RaceId>((snap.race as RaceId) || "vesper");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
   return (
-    <div className="panel-drawer px-panel">
+    <div className="panel-drawer px-panel pointer-events-auto">
       <p className="font-display text-xs text-blood">REBIRTH</p>
       <p className="mt-2 text-dim">This witch is gone. Account Score stays. Choose the next body.</p>
-      <p className="mt-1 text-kyo">Score {snap.accountScore}</p>
+      <p className="mt-1 text-kyo">Score {snap.accountScore ?? 0}</p>
+      {err && <p className="mt-1 text-blood text-sm">{err}</p>}
       <label className="mt-3 grid gap-1 text-sm">Name
         <input className="px-input" value={name} onChange={(e) => setName(e.target.value)} maxLength={16} />
       </label>
@@ -152,9 +176,12 @@ function Rebirth({ snap, game }: { snap: ReturnType<typeof getSnap>; game: Turbz
           </button>
         ))}
       </div>
-      <button className="px-btn px-btn-kyo mt-4" type="button" onClick={() => game?.rebirth(name.trim() || "Huntress", race)}>
-        Rise again
-      </button>
+      <button className="px-btn px-btn-kyo mt-4" type="button" disabled={busy} onClick={() => {
+        setBusy(true); setErr("");
+        try { game?.rebirth(name.trim() || "Huntress", race); }
+        catch (e) { setErr(e instanceof Error ? e.message : "Rebirth failed"); setBusy(false); }
+      }}>Rise again</button>
+      <button className="px-btn mt-2" type="button" onClick={() => game?.toTitle()}>Return to title</button>
     </div>
   );
 }
@@ -167,7 +194,8 @@ export function Play({
   chat: string;
   setChat: (v: string) => void;
 }) {
-  const last = snap.chat[snap.chat.length - 1];
+  const chatLog = Array.isArray(snap.chat) ? snap.chat : [];
+  const last = chatLog[chatLog.length - 1];
   const bag = Array.isArray(snap.bag) ? snap.bag : [];
   const gear = Array.isArray(snap.gear) ? snap.gear : [];
   const skills = Array.isArray(snap.skills) ? snap.skills : [];
@@ -175,13 +203,15 @@ export function Play({
   const box = Array.isArray(snap.box) ? snap.box : [];
   const bar = Array.isArray(snap.bar) ? snap.bar : [];
   const equipped = Array.isArray(snap.equipped) ? snap.equipped : [];
+  const menuLines = snap.menu && Array.isArray(snap.menu.lines) ? snap.menu.lines : [];
+  const menuActions = snap.menu && Array.isArray(snap.menu.actions) ? snap.menu.actions : [];
 
   if (snap.panel === "rebirth") return <Rebirth snap={snap} game={game} />;
 
   return (
     <>
       <div className="vitals-dock px-panel pointer-events-auto">
-        <p className="font-display text-xs text-kyo">{snap.name} · lv {snap.level} · score {snap.accountScore}</p>
+        <p className="font-display text-xs text-kyo">{snap.name} · lv {snap.level} · score {snap.accountScore ?? 0}</p>
         <div className="bar-track mt-1">
           <div className="h-full bg-blood" style={{ width: `${Math.max(0, Math.min(100, (snap.hp / Math.max(1, snap.maxHp)) * 100))}%` }} />
         </div>
@@ -189,19 +219,21 @@ export function Play({
         {snap.foe && <p className="text-kyo">{snap.foe}</p>}
         {snap.turn && <p className="text-dim">{snap.turn}</p>}
         {snap.autoplay && <p className="text-kyo">Autoplay · {snap.grind || "looking"}</p>}
-        {snap.log[0] && <p>{snap.log[0]}</p>}
-        <form className="mt-1" onSubmit={(e) => { e.preventDefault(); game?.sendChat(chat); setChat(""); }}>
+        {Array.isArray(snap.log) && snap.log[0] && <p>{snap.log[0]}</p>}
+        {snap.shrine && <p className="text-kyo">{snap.shrine}</p>}
+        {snap.roomCode && <p className="text-kyo">Lobby {snap.roomCode}</p>}
+        <form className="mt-1" onSubmit={(e) => { e.preventDefault(); try { game?.sendChat(chat); } catch {} setChat(""); }}>
           <input value={chat} onChange={(e) => setChat(e.target.value)} placeholder={last ? `${last.name}: ${last.text}` : "Party chat"} className="w-full border-2 border-bone bg-ink px-2 py-1 text-bone outline-none" />
         </form>
       </div>
       {snap.hint && !snap.menu && !snap.panel && <div className="hint-chip px-panel">{snap.hint}</div>}
       {snap.duel && <div className="pointer-events-auto"><DuelBanner duel={snap.duel} /></div>}
       {snap.menu && (
-        <div className="ctx-menu px-panel pointer-events-auto" style={{ left: Math.max(8, Math.min(snap.menu.sx, (typeof window !== "undefined" ? window.innerWidth : 400) - 340)), top: Math.max(8, Math.min(snap.menu.sy, (typeof window !== "undefined" ? window.innerHeight : 400) - 240)) }}>
+        <div className="ctx-menu px-panel pointer-events-auto" style={{ left: Math.max(8, Math.min(snap.menu.sx ?? 8, (typeof window !== "undefined" ? window.innerWidth : 400) - 340)), top: Math.max(8, Math.min(snap.menu.sy ?? 8, (typeof window !== "undefined" ? window.innerHeight : 400) - 240)) }}>
           <p className="font-display text-xs text-kyo">{snap.menu.title}</p>
-          {snap.menu.lines.map((line) => <p key={line} className="text-dim">{line}</p>)}
+          {menuLines.map((line) => <p key={line} className="text-dim">{line}</p>)}
           <div className="mt-2 flex flex-wrap gap-1">
-            {snap.menu.actions.map((a) => (
+            {menuActions.map((a) => (
               <button key={a.id} className="px-btn text-xs" type="button" onClick={() => game?.menuAct(a.id)}>{a.label}</button>
             ))}
             <button className="px-btn text-xs" type="button" onClick={() => game?.clearMenu()}>Close</button>
@@ -211,8 +243,8 @@ export function Play({
       <div className="dock">
         <div className="move-row">
           {bar.map((m) => (
-            <button key={m.id} type="button" className="px-btn text-xs" disabled={m.cd > 0} onClick={() => game?.cast(m.id)} title={m.name}>
-              <span className={typeClass(m.type)}>{m.name}</span>{m.cd > 0 ? ` ${Math.ceil(m.cd)}` : ""}
+            <button key={m.id} type="button" className="px-btn text-xs" disabled={(m.cd ?? 0) > 0} onClick={() => game?.cast(m.id)} title={m.name}>
+              <span className={typeClass(m.type)}>{m.name}</span>{(m.cd ?? 0) > 0 ? ` ${Math.ceil(m.cd)}` : ""}
             </button>
           ))}
         </div>
@@ -223,6 +255,7 @@ export function Play({
       {snap.panel && snap.panel !== "talk" && snap.panel !== "rebirth" && (
         <div className="pointer-events-auto">
           <Panel title={String(snap.panel)} onClose={() => game?.closePanel()}>
+            {snap.panel === "map" && <MiniMap game={game} />}
             {snap.panel === "bag" && (
               <div className="grid gap-2">
                 {bag.map((b) => <button key={b.id} className="px-btn text-left text-xs" type="button" onClick={() => game?.useBag(b.id)}>{b.name} ×{b.count}</button>)}
