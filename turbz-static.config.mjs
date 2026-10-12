@@ -17,7 +17,7 @@ export default defineConfig({
     outDir: "dist-static",
     emptyOutDir: true,
     rollupOptions: {
-      input: resolve(__dirname, "cloudflare.html"),
+      input: resolve(__dirname, "index.html"),
     },
   },
 });
