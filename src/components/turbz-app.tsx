@@ -90,18 +90,20 @@ export function ApiGate() {
           </label>
           <label className="grid gap-1 text-sm">
             Password
-            <input className="px-input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete={mode === "up" ? "new-password" : "current-password"} />
+            <input
+              className="px-input"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete={mode === "up" ? "new-password" : "current-password"}
+            />
           </label>
           {err && <p className="text-blood text-sm">{err}</p>}
           <div className="mt-2 flex flex-wrap gap-2">
             <button type="submit" className="px-btn px-btn-kyo" disabled={busy}>
               {busy ? "…" : mode === "up" ? "Create" : "Enter"}
             </button>
-            <button
-              type="button"
-              className="px-btn"
-              onClick={() => setMode(mode === "up" ? "in" : "up")}
-            >
+            <button type="button" className="px-btn" onClick={() => setMode(mode === "up" ? "in" : "up")}>
               {mode === "up" ? "Have an account" : "Need an account"}
             </button>
           </div>
@@ -113,11 +115,13 @@ export function ApiGate() {
 
 function Hunt() {
   const snap = useSnap();
-  const gameRef = useRef<TurbzGame | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const gameRef = useRef<TurbzGame | null>(null);
   const [screen, setScreen] = useState<"hub" | "hunt" | "circle" | "hard" | "boards" | "options" | "build">("hub");
   const [arenaSeed, setArenaSeed] = useState<unknown>(null);
   const [create, setCreate] = useState(false);
+  const [race, setRace] = useState<RaceId>("vesper");
+  const [name, setName] = useState("");
   const username = snap.name || "witch";
 
   const onArenaCloud = useCallback((save: unknown | null) => {
@@ -128,88 +132,162 @@ function Hunt() {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    if (!gameRef.current) gameRef.current = new TurbzGame(canvas);
-    const game = gameRef.current;
-    game.mount();
-    return () => game.unmount();
-  }, []);
-
-  useEffect(() => {
+    const game = new TurbzGame(canvas);
+    gameRef.current = game;
+    game.attachCloud((json) => {
+      void writeCloudSave(json);
+    });
+    game.attachGrave((body: GraveBody) => {
+      void postGrave(body);
+    });
+    game.start();
     void loadCloudSave()
       .then((split) => {
         if (split) {
           ingestCloud(split);
+          if (split.hunt && typeof split.hunt === "object") game.rememberCloud(split.hunt);
+          if (split.hardcore && typeof split.hardcore === "object") game.rememberHard(split.hardcore);
           if (split.arena) setArenaSeed(split.arena);
           else setArenaSeed(readArenaLocal());
         } else setArenaSeed(readArenaLocal());
       })
       .catch(() => setArenaSeed(readArenaLocal()));
+    return () => game.stop();
   }, []);
 
   const game = gameRef.current;
 
   return (
     <main className="game-root relative overflow-hidden">
-      <canvas ref={canvasRef} className="game-canvas" />
-      <div className="game-ui pointer-events-none absolute inset-0 flex flex-col">
+      <canvas ref={canvasRef} className="game-canvas absolute inset-0 h-full w-full" />
+      <div className="pointer-events-none absolute inset-0 z-10 flex flex-col">
         <div className="pointer-events-auto">
           <ChatDock username={username} playing={snap.mode === "play" && screen !== "hub"} />
-          {screen === "hub" && snap.mode !== "play" && (
+        </div>
+        {screen === "hub" && snap.mode !== "play" && (
+          <div className="pointer-events-auto">
             <Hub
               username={username}
-              onHunt={() => setScreen("hunt")}
+              onHunt={() => {
+                setCreate(false);
+                setScreen("hunt");
+              }}
               onCircle={() => setScreen("circle")}
-              onHard={() => setScreen("hard")}
+              onHard={() => {
+                setCreate(false);
+                setScreen("hard");
+              }}
               onBoards={() => setScreen("boards")}
               onOptions={() => setScreen("options")}
               onBuild={() => setScreen("build")}
             />
-          )}
-          {screen === "circle" && (
-            <ArenaScreen
-              seed={arenaSeed}
-              onClose={() => setScreen("hub")}
-              onCloud={onArenaCloud}
-            />
-          )}
-          {screen === "boards" && snap.mode !== "play" && <Boards onBack={() => setScreen("hub")} />}
-          {screen === "options" && snap.mode !== "play" && (
+          </div>
+        )}
+        {(screen === "hunt" || screen === "hard") && snap.mode !== "play" && !create && (
+          <div className="pointer-events-auto flex h-full items-center justify-center p-3">
+            <div className="screen-card px-panel w-full max-w-md p-4">
+              <p className="font-display text-xs text-blood">{screen === "hard" ? "HARDCORE" : "TURBOHUNT"}</p>
+              <h2 className="font-display mt-2 text-lg text-bone">{screen === "hard" ? "Skill grind" : "Enter the wilds"}</h2>
+              <p className="mt-2 text-dim">
+                {snap.hasSave
+                  ? "A save waits on this veil. Continue, or burn a new witch."
+                  : "No save yet. Name a witch and pick a race."}
+              </p>
+              <div className="mt-4 grid gap-2">
+                {snap.hasSave && (
+                  <button
+                    className="px-btn px-btn-kyo"
+                    onClick={() => {
+                      gameRef.current?.continueSave?.(screen === "hard");
+                    }}
+                  >
+                    Continue
+                  </button>
+                )}
+                <button className="px-btn" onClick={() => setCreate(true)}>
+                  New witch
+                </button>
+                <button className="px-btn" onClick={() => setScreen("hub")}>
+                  Back
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {(screen === "hunt" || screen === "hard") && snap.mode !== "play" && create && (
+          <div className="pointer-events-auto flex h-full items-center justify-center p-3">
+            <div className="screen-card px-panel w-full max-w-md p-4">
+              <p className="font-display text-bone">New witch</p>
+              <label className="mt-3 grid gap-1 text-sm">
+                Name
+                <input className="px-input" value={name} onChange={(e) => setName(e.target.value)} maxLength={16} />
+              </label>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                {RACES.map((r) => (
+                  <button
+                    key={r.id}
+                    type="button"
+                    className={`px-btn ${race === r.id ? "px-btn-kyo" : ""}`}
+                    onClick={() => setRace(r.id)}
+                  >
+                    {r.name}
+                  </button>
+                ))}
+              </div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button
+                  className="px-btn px-btn-kyo"
+                  onClick={() => {
+                    const n = name.trim() || "Witch";
+                    gameRef.current?.newGame?.(n, race, screen === "hard");
+                  }}
+                >
+                  Begin
+                </button>
+                <button className="px-btn" onClick={() => setCreate(false)}>
+                  Back
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {screen === "circle" && (
+          <div className="pointer-events-auto">
+            <ArenaScreen seed={arenaSeed} onClose={() => setScreen("hub")} onCloud={onArenaCloud} />
+          </div>
+        )}
+        {screen === "boards" && snap.mode !== "play" && (
+          <div className="pointer-events-auto">
+            <Boards onBack={() => setScreen("hub")} />
+          </div>
+        )}
+        {screen === "options" && snap.mode !== "play" && (
+          <div className="pointer-events-auto">
             <Options username={username} onBack={() => setScreen("hub")} />
-          )}
-          {screen === "build" && snap.mode !== "play" && <MapBuilder onBack={() => setScreen("hub")} />}
-          {screen === "hunt" && snap.mode !== "play" && !create && (
-            <div className="screen-card px-panel m-3 max-w-md p-4">
-              <p className="font-display text-bone">Hunt</p>
-              <button className="px-btn px-btn-kyo mt-3" onClick={() => game?.startHunt?.(false)}>
-                Enter the wilds
-              </button>
-              <button className="px-btn mt-2" onClick={() => setScreen("hub")}>
-                Back
-              </button>
-            </div>
-          )}
-          {screen === "hard" && snap.mode !== "play" && (
-            <div className="screen-card px-panel m-3 max-w-md p-4">
-              <p className="font-display text-bone">Hardcore</p>
-              <button className="px-btn px-btn-kyo mt-3" onClick={() => game?.startHunt?.(true)}>
-                Skill grind
-              </button>
-              <button className="px-btn mt-2" onClick={() => setScreen("hub")}>
-                Back
-              </button>
-            </div>
-          )}
-          {snap.mode === "play" && (
-            <div className="pointer-events-auto m-2 flex gap-2">
-              <UserButton />
-              <button className="px-btn" onClick={() => game?.pause?.()}>
-                Pause
-              </button>
-            </div>
-          )}
-        </div>
+          </div>
+        )}
+        {screen === "build" && snap.mode !== "play" && (
+          <div className="pointer-events-auto">
+            <MapBuilder onBack={() => setScreen("hub")} />
+          </div>
+        )}
+        {snap.mode === "play" && screen !== "circle" && (
+          <div className="pointer-events-auto m-2 flex flex-wrap gap-2">
+            <UserButton />
+            <button className="px-btn" onClick={() => gameRef.current?.togglePanel?.("pause")}>
+              Pause
+            </button>
+            <span className="text-dim text-sm self-center">
+              Lv {snap.level} · {snap.hp}/{snap.maxHp} HP · {snap.kyo} kyo
+            </span>
+          </div>
+        )}
+        {snap.duel && (
+          <div className="pointer-events-auto">
+            <DuelBanner duel={snap.duel} />
+          </div>
+        )}
       </div>
-      <DuelBanner />
     </main>
   );
 }
