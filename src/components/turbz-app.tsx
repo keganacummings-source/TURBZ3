@@ -2,9 +2,9 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import { authClient } from "@/lib/auth/client";
 import { UserButton } from "@/lib/auth/gates";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
-import { RACES, TYPES, type RaceId, type TypeId } from "@/game/content";
+import { RACES, type RaceId } from "@/game/content";
 import { loadCloudSave, writeCloudSave } from "@/game/cloud-client";
-import { bindCloud, cloudReady, ingestCloud, noteArena, noteHardcore, noteHunt, readArenaLocal } from "@/game/account-save";
+import { ingestCloud, noteArena, readArenaLocal } from "@/game/account-save";
 import { postGrave } from "@/game/social-client";
 import type { GraveBody } from "@/game/social-types";
 import { ArenaScreen } from "@/components/arena-ui";
@@ -134,7 +134,7 @@ function Hunt() {
     if (!canvas) return;
     const game = new TurbzGame(canvas);
     gameRef.current = game;
-    game.attachCloud((json) => {
+    game.attachCloud((json: string) => {
       void writeCloudSave(json);
     });
     game.attachGrave((body: GraveBody) => {
@@ -154,8 +154,6 @@ function Hunt() {
       .catch(() => setArenaSeed(readArenaLocal()));
     return () => game.stop();
   }, []);
-
-  const game = gameRef.current;
 
   return (
     <main className="game-root relative overflow-hidden">
@@ -195,19 +193,14 @@ function Hunt() {
               </p>
               <div className="mt-4 grid gap-2">
                 {snap.hasSave && (
-                  <button
-                    className="px-btn px-btn-kyo"
-                    onClick={() => {
-                      gameRef.current?.continueSave?.(screen === "hard");
-                    }}
-                  >
+                  <button className="px-btn px-btn-kyo" type="button" onClick={() => gameRef.current?.continueGame()}>
                     Continue
                   </button>
                 )}
-                <button className="px-btn" onClick={() => setCreate(true)}>
+                <button className="px-btn" type="button" onClick={() => setCreate(true)}>
                   New witch
                 </button>
-                <button className="px-btn" onClick={() => setScreen("hub")}>
+                <button className="px-btn" type="button" onClick={() => setScreen("hub")}>
                   Back
                 </button>
               </div>
@@ -237,14 +230,18 @@ function Hunt() {
               <div className="mt-4 flex flex-wrap gap-2">
                 <button
                   className="px-btn px-btn-kyo"
+                  type="button"
                   onClick={() => {
                     const n = name.trim() || "Witch";
-                    gameRef.current?.newGame?.(n, race, screen === "hard");
+                    if (screen === "hard") gameRef.current.rules = "hardcore";
+                    else gameRef.current.rules = "hunt";
+                    gameRef.current?.begin(n, race);
+                    setCreate(false);
                   }}
                 >
                   Begin
                 </button>
-                <button className="px-btn" onClick={() => setCreate(false)}>
+                <button className="px-btn" type="button" onClick={() => setCreate(false)}>
                   Back
                 </button>
               </div>
@@ -274,8 +271,8 @@ function Hunt() {
         {snap.mode === "play" && screen !== "circle" && (
           <div className="pointer-events-auto m-2 flex flex-wrap gap-2">
             <UserButton />
-            <button className="px-btn" onClick={() => gameRef.current?.togglePanel?.("pause")}>
-              Pause
+            <button className="px-btn" type="button" onClick={() => gameRef.current?.toggleMenu?.()}>
+              Menu
             </button>
             <span className="text-dim text-sm self-center">
               Lv {snap.level} · {snap.hp}/{snap.maxHp} HP · {snap.kyo} kyo
