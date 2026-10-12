@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { authClient } from "@/lib/auth/client";
-import { UserButton } from "@/lib/auth/gates";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
-import { RACES, type RaceId } from "@/game/content";
+import type { RaceId } from "@/game/content";
 import { loadCloudSave, writeCloudSave } from "@/game/cloud-client";
-import { ingestCloud, noteArena, readArenaLocal } from "@/game/account-save";
+import { bindCloud, ingestCloud, noteArena, readArenaLocal } from "@/game/account-save";
 import { postGrave } from "@/game/social-client";
 import type { GraveBody } from "@/game/social-types";
 import { ArenaScreen } from "@/components/arena-ui";
 import { Boards, ChatDock, DuelBanner, Hub, Options } from "@/components/hub-ui";
 import { MapBuilder } from "@/components/map-builder";
+import { Create, Play, Title } from "@/components/hunt-screens";
 import { getSnap, subscribe, TurbzGame } from "@/game/engine";
 
 function useSnap() {
@@ -113,6 +113,13 @@ export function ApiGate() {
   );
 }
 
+function makeCode() {
+  const a = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let s = "";
+  for (let i = 0; i < 5; i++) s += a[Math.floor(Math.random() * a.length)]!;
+  return s;
+}
+
 function Hunt() {
   const snap = useSnap();
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -122,7 +129,13 @@ function Hunt() {
   const [create, setCreate] = useState(false);
   const [race, setRace] = useState<RaceId>("vesper");
   const [name, setName] = useState("");
+  const [code, setCode] = useState("");
+  const [intent, setIntent] = useState<"solo" | "host" | "join">("solo");
+  const [chat, setChat] = useState("");
+  const [booted, setBooted] = useState(false);
   const username = snap.name || "witch";
+
+  const g = () => gameRef.current;
 
   const onArenaCloud = useCallback((save: unknown | null) => {
     noteArena(save);
@@ -136,11 +149,16 @@ function Hunt() {
     gameRef.current = game;
     game.attachCloud((json: string) => {
       void writeCloudSave(json);
+      try {
+        const parsed = JSON.parse(json);
+        if (parsed) bindCloud(parsed);
+      } catch {}
     });
     game.attachGrave((body: GraveBody) => {
       void postGrave(body);
     });
     game.start();
+    setBooted(true);
     void loadCloudSave()
       .then((split) => {
         if (split) {
@@ -182,75 +200,84 @@ function Hunt() {
           </div>
         )}
         {(screen === "hunt" || screen === "hard") && snap.mode !== "play" && !create && (
-          <div className="pointer-events-auto flex h-full items-center justify-center p-3">
-            <div className="screen-card px-panel w-full max-w-md p-4">
-              <p className="font-display text-xs text-blood">{screen === "hard" ? "HARDCORE" : "TURBOHUNT"}</p>
-              <h2 className="font-display mt-2 text-lg text-bone">{screen === "hard" ? "Skill grind" : "Enter the wilds"}</h2>
-              <p className="mt-2 text-dim">
-                {snap.hasSave
-                  ? "A save waits on this veil. Continue, or burn a new witch."
-                  : "No save yet. Name a witch and pick a race."}
-              </p>
-              <div className="mt-4 grid gap-2">
-                {snap.hasSave && (
-                  <button className="px-btn px-btn-kyo" type="button" onClick={() => gameRef.current?.continueGame()}>
-                    Continue
-                  </button>
-                )}
-                <button className="px-btn" type="button" onClick={() => setCreate(true)}>
-                  New witch
-                </button>
-                <button className="px-btn" type="button" onClick={() => setScreen("hub")}>
-                  Back
-                </button>
-              </div>
-            </div>
+          <div className="pointer-events-auto">
+            <Title
+              kind={screen === "hard" ? "hard" : "hunt"}
+              hasSave={snap.hasSave}
+              code={code}
+              setCode={setCode}
+              onBack={() => setScreen("hub")}
+              onNew={() => {
+                setIntent("solo");
+                setCreate(true);
+              }}
+              onContinue={() => {
+                g()?.continueGame();
+              }}
+              onHost={() => {
+                const c = code.trim() || makeCode();
+                setCode(c);
+                setIntent("host");
+                if (snap.hasSave) g()?.continueGame({ role: "host", code: c });
+                else setCreate(true);
+              }}
+              onJoin={() => {
+                const c = code.trim();
+                if (c.length < 3) return;
+                setIntent("join");
+                if (snap.hasSave) g()?.continueGame({ role: "guest", code: c });
+                else setCreate(true);
+              }}
+              circleReady={booted}
+              circleMarks={
+                arenaSeed && typeof arenaSeed === "object" && "points" in arenaSeed
+                  ? Number((arenaSeed as { points: number }).points)
+                  : null
+              }
+              onCircle={() => setScreen("circle")}
+            />
           </div>
         )}
         {(screen === "hunt" || screen === "hard") && snap.mode !== "play" && create && (
-          <div className="pointer-events-auto flex h-full items-center justify-center p-3">
-            <div className="screen-card px-panel w-full max-w-md p-4">
-              <p className="font-display text-bone">New witch</p>
-              <label className="mt-3 grid gap-1 text-sm">
-                Name
-                <input className="px-input" value={name} onChange={(e) => setName(e.target.value)} maxLength={16} />
-              </label>
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                {RACES.map((r) => (
-                  <button
-                    key={r.id}
-                    type="button"
-                    className={`px-btn ${race === r.id ? "px-btn-kyo" : ""}`}
-                    onClick={() => setRace(r.id)}
-                  >
-                    {r.name}
-                  </button>
-                ))}
-              </div>
-              <div className="mt-4 flex flex-wrap gap-2">
-                <button
-                  className="px-btn px-btn-kyo"
-                  type="button"
-                  onClick={() => {
-                    const n = name.trim() || "Witch";
-                    if (screen === "hard") gameRef.current.rules = "hardcore";
-                    else gameRef.current.rules = "hunt";
-                    gameRef.current?.begin(n, race);
-                    setCreate(false);
-                  }}
-                >
-                  Begin
-                </button>
-                <button className="px-btn" type="button" onClick={() => setCreate(false)}>
-                  Back
-                </button>
-              </div>
-            </div>
+          <div className="pointer-events-auto">
+            <Create
+              name={name}
+              setName={setName}
+              race={race}
+              setRace={setRace}
+              game={g()}
+              onBack={() => setCreate(false)}
+              onGo={() => {
+                if (screen === "hard") {
+                  try {
+                    g()!.rules = "hardcore";
+                  } catch {}
+                }
+                const lobby =
+                  intent === "solo"
+                    ? undefined
+                    : { role: intent === "host" ? ("host" as const) : ("guest" as const), code: code.trim() || makeCode() };
+                g()?.begin(name, race, lobby);
+                setCreate(false);
+              }}
+            />
+          </div>
+        )}
+        {snap.mode === "play" && screen !== "circle" && screen !== "boards" && screen !== "options" && screen !== "build" && (
+          <div className="pointer-events-auto">
+            <Play snap={snap} game={g()} chat={chat} setChat={setChat} />
           </div>
         )}
         {screen === "circle" && (
           <div className="pointer-events-auto">
-            <ArenaScreen seed={arenaSeed} onClose={() => setScreen("hub")} onCloud={onArenaCloud} />
+            <ArenaScreen
+              seed={arenaSeed}
+              onClose={() => setScreen("hub")}
+              onCloud={onArenaCloud}
+              onGrave={(body) => {
+                void postGrave(body).catch(() => {});
+              }}
+            />
           </div>
         )}
         {screen === "boards" && snap.mode !== "play" && (
@@ -266,17 +293,6 @@ function Hunt() {
         {screen === "build" && snap.mode !== "play" && (
           <div className="pointer-events-auto">
             <MapBuilder onBack={() => setScreen("hub")} />
-          </div>
-        )}
-        {snap.mode === "play" && screen !== "circle" && (
-          <div className="pointer-events-auto m-2 flex flex-wrap gap-2">
-            <UserButton />
-            <button className="px-btn" type="button" onClick={() => gameRef.current?.toggleMenu?.()}>
-              Menu
-            </button>
-            <span className="text-dim text-sm self-center">
-              Lv {snap.level} · {snap.hp}/{snap.maxHp} HP · {snap.kyo} kyo
-            </span>
           </div>
         )}
         {snap.duel && (
