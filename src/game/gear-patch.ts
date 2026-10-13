@@ -27,7 +27,10 @@ function outfitSaveWithPack(game: any, save: any): void {
     return !!(g && (g as any).packPath);
   };
 
-  const addFromSlot = (packSlot: string, gearSlot: string) => {
+  // One visual set index so V2 paperdoll layers match
+  const setStyle = Math.floor(rng() * 20);
+
+  const addFromSlot = (packSlot: string, gearSlot: string, forceStyle?: number) => {
     if (hasPack(gearSlot)) return;
     const pool = pack.items.filter((i) => i.slot === packSlot);
     if (!pool.length) return;
@@ -39,14 +42,15 @@ function outfitSaveWithPack(game: any, save: any): void {
     if (!piece) return;
     (piece as any).slot = gearSlot;
     (piece as any).typeless = true;
+    if (forceStyle !== undefined) (piece as any).style = forceStyle;
     gear.push(piece);
     equipped[gearSlot] = piece.uid;
   };
 
   addFromSlot("weapon", "weapon");
-  addFromSlot("chest", "chest");
-  addFromSlot("head", "head");
-  addFromSlot("feet", "feet");
+  addFromSlot("chest", "chest", setStyle);
+  addFromSlot("head", "head", setStyle);
+  addFromSlot("feet", "feet", setStyle);
   addFromSlot("shield", "relic");
 }
 
