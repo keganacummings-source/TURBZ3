@@ -2,14 +2,18 @@ import type { ActorDraw } from "./sprites-body";
 export * from "./sprites-body";
 export type { ActorDraw, Pal } from "./sprites-body";
 import { drawActorProcedural } from "./sprites-body";
+import { drawV2Character, ensureV2Character, shouldUseV2Character } from "./character-v2";
 import { drawCharacterSprite, ensureCharacterPack, shouldUseCharacterSprite } from "./character-sprite";
 import type { Gear } from "./content";
 
-/** Player uses CharacterPack when available; NPCs stay procedural unless female pack path. */
+/** Prefer V2 witch paperdoll; fall back to CharacterPack; then procedural. */
 export function drawActor(ctx: CanvasRenderingContext2D, a: ActorDraw): void {
+  ensureV2Character();
+  if (shouldUseV2Character(a)) {
+    if (drawV2Character(ctx, a)) return;
+  }
   ensureCharacterPack();
   if (shouldUseCharacterSprite(a)) {
-    // Prefer explicit packGear; otherwise synthesize from pieces that carry packPath
     let gear = a.packGear as Gear[] | undefined;
     if (!gear?.length && a.pieces?.some((p) => (p as { packPath?: string }).packPath)) {
       gear = a.pieces
@@ -35,13 +39,9 @@ export function drawActor(ctx: CanvasRenderingContext2D, a: ActorDraw): void {
             }) as Gear,
         );
     }
-    const ok = drawCharacterSprite(ctx, a, {
-      moving: a.moving,
-      running: a.running,
-      airborne: a.airborne,
-      gear,
-    });
-    if (ok) return;
+    if (drawCharacterSprite(ctx, a, { moving: a.moving, running: a.running, airborne: a.airborne, gear })) {
+      return;
+    }
   }
   drawActorProcedural(ctx, a);
 }
