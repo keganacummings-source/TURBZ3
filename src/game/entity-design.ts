@@ -10,7 +10,13 @@ export type EntityCategory =
   | "mining"
   | "board"
   | "custom"
-  | "weapon";
+  | "weapon"
+  | "armor"
+  | "resource"
+  | "crafting"
+  | "recipe"
+  | "consumable"
+  | "equipable";
 
 export type EntityDesign = {
   version: 1;
@@ -27,31 +33,50 @@ export type EntityDesign = {
   action?: string;
   skill?: string;
   yield?: string;
+  armor?: number;
+  recipeInputs?: string;
+  recipeOutput?: string;
+  equipSlot?: "head" | "chest" | "legs" | "feet" | "relic" | "weapon" | "none";
   notes: string;
   about?: string;
 };
 
+export const ENTITY_ACTIONS: { id: string; label: string; about: string }[] = [
+  { id: "interact", label: "Interact", about: "Generic talk / inspect" },
+  { id: "chop", label: "Chop log", about: "Woodcutting — gather timber" },
+  { id: "mine", label: "Mine ore", about: "Mining — gather ore / gems" },
+  { id: "fish", label: "Take fish", about: "Fishing — gather fish (also press F at any water tile)" },
+  { id: "cook", label: "Make Food", about: "Cook at campfire" },
+  { id: "purify", label: "Purify water", about: "Turn raw water into drinking water" },
+  { id: "rest", label: "Rest / Sleep", about: "Recover rest meter at camp" },
+  { id: "open_chest", label: "Open chest", about: "Loot container" },
+  { id: "pickup", label: "Pick up", about: "Add resource to bag" },
+  { id: "craft", label: "Craft", about: "Consume recipe inputs, grant output" },
+  { id: "equip", label: "Equip", about: "Wear armor or wield weapon (stats only; no body overlay)" },
+  { id: "use", label: "Use item", about: "Consumable — heal, buff, jar, etc." },
+  { id: "trade", label: "Trade", about: "Open shop / barter" },
+  { id: "quest", label: "Quest board", about: "Read / accept quests" },
+  { id: "attack", label: "Hostile", about: "Enemy combatant" },
+  { id: "talk", label: "Talk", about: "NPC dialogue" },
+];
+
 const CATEGORY_NOTES: Record<EntityCategory, string> = {
-  enemy:
-    "Enemy unit for combat. Place as a spawn on maps via Map Builder. Set combat stats (HP, damage, speed, range, element type). Ghost variant is the spirit form shown after defeat or in spectral modes. Supports type matchups. Export JSON to include in game content.",
-  player:
-    "Player model sprite. Used for character appearance in the world and hub. Draw the base sprite; future support for directional frames. Notes describe race/class or visual style.",
-  npc:
-    "NPC sprite and interaction. Can talk, trade, or give quests. Place near boards or taverns. Notes describe dialogue and available actions.",
-  campfire:
-    "Campfire interactable. Players can rest or Make Food (cook recipes) when near it. Supports survival crafting. Place on safe tiles.",
-  tree:
-    "Tree / wood resource. Players Interact or Chop log using Woodcutting skill to gather timber. Regenerates over time in full game. Place on verdant tiles.",
-  fishing:
-    "Fishing spot. Interact to Take fish using Fishing skill. Yields fish items for cooking or trade. Best placed on water-adjacent tiles.",
-  mining:
-    "Mining spot / ore node. Interact to mine ore using Mining skill. Yields ore or gems. Place on rocky or ashen tiles.",
-  board:
-    "Notice / quest board. Interact to view quests, messages, or job offers. Place near taverns or hubs. Notes can list sample quests.",
-  custom:
-    "Custom interactable object. Define any action such as 'Take fish', 'Make Food', 'Chop log', 'Interact', 'Open chest'. Notes explain the full behavior so designers and players know what it does. Place on any walkable tile.",
-  weapon:
-    "Equipment weapon. Provides combat stats when equipped. Pixel art for inventory and held appearance. Element type for matchups.",
+  enemy: "Enemy unit for combat. Set combat stats. Ghost variant for spirit form.",
+  player: "Player model sprite for character appearance.",
+  npc: "NPC sprite and interaction.",
+  campfire: "Campfire interactable for rest and cooking.",
+  tree: "Tree / wood resource. Chop for timber.",
+  fishing: "Fishing spot. Take fish (or press F at any water tile in-game).",
+  mining: "Mining spot / ore node.",
+  board: "Notice / quest board.",
+  custom: "Custom interactable. Pick an action from the full action list.",
+  weapon: "Equipment weapon. Equippable for stats; no body overlay.",
+  armor: "Armor piece. Equippable for armor stats; no body overlay.",
+  resource: "Gatherable resource node or bag item.",
+  crafting: "Crafting station.",
+  recipe: "Crafting recipe definition.",
+  consumable: "Usable bag item.",
+  equipable: "Generic equipable. Choose equipSlot.",
 };
 
 export const CATEGORY_LABELS: Record<EntityCategory, string> = {
@@ -59,12 +84,18 @@ export const CATEGORY_LABELS: Record<EntityCategory, string> = {
   player: "Player Model",
   npc: "NPC",
   campfire: "Campfire",
-  tree: "Tree",
+  tree: "Tree / Wood",
   fishing: "Fishing Spot",
   mining: "Mining Spot",
-  board: "Board",
+  board: "Quest Board",
   custom: "Custom Interactable",
-  weapon: "Weapon",
+  weapon: "Weapon (equip, no body overlay)",
+  armor: "Armor (equip, no body overlay)",
+  resource: "Resource / Node",
+  crafting: "Crafting Station",
+  recipe: "Crafting Recipe",
+  consumable: "Consumable Item",
+  equipable: "Generic Equipable",
 };
 
 function emptyPixels(): (string | null)[] {
@@ -92,34 +123,52 @@ export function newEntityDesign(category: EntityCategory = "enemy"): EntityDesig
     base.speed = 1;
     base.range = 48;
     base.ghostPixels = emptyPixels();
-    // simple body
     for (let y = 4; y < 12; y++) for (let x = 6; x <= 9; x++) base.pixels[y * 16 + x] = "#8d72a8";
   } else if (category === "weapon") {
     base.type = "normal";
     base.damage = 12;
     base.speed = 1;
     base.range = 48;
+    base.equipSlot = "weapon";
+    base.action = "equip";
   } else if (category === "tree") {
-    base.action = "Chop log";
+    base.action = "chop";
     base.skill = "woodcutting";
     base.yield = "timber";
-    for (let y = 2; y < 10; y++) for (let x = 5; x <= 10; x++) base.pixels[y * 16 + x] = "#3a5a2a";
-    for (let y = 10; y < 15; y++) base.pixels[y * 16 + 8] = "#6a4a30";
   } else if (category === "fishing") {
-    base.action = "Take fish";
+    base.action = "fish";
     base.skill = "fishing";
     base.yield = "fish";
   } else if (category === "mining") {
-    base.action = "Mine ore";
+    base.action = "mine";
     base.skill = "mining";
     base.yield = "ore";
   } else if (category === "campfire") {
-    base.action = "Make Food";
-    base.skill = "none";
+    base.action = "cook";
   } else if (category === "board") {
-    base.action = "Interact";
+    base.action = "quest";
   } else if (category === "custom") {
-    base.action = "Interact";
+    base.action = "interact";
+  } else if (category === "armor") {
+    base.type = "normal";
+    base.armor = 8;
+    base.equipSlot = "chest";
+    base.action = "equip";
+  } else if (category === "resource") {
+    base.action = "pickup";
+    base.yield = "timber";
+  } else if (category === "crafting") {
+    base.action = "craft";
+  } else if (category === "recipe") {
+    base.action = "craft";
+    base.recipeInputs = "timber:2,meat:1";
+    base.recipeOutput = "cooked_meat";
+  } else if (category === "consumable") {
+    base.action = "use";
+  } else if (category === "equipable") {
+    base.action = "equip";
+    base.equipSlot = "relic";
+    base.armor = 2;
   }
   return base;
 }
@@ -181,6 +230,10 @@ export function parseEntityDesign(raw: unknown): EntityDesign {
     action: e.action?.trim(),
     skill: e.skill?.trim(),
     yield: e.yield?.trim(),
+    armor: typeof e.armor === "number" && Number.isFinite(e.armor) ? e.armor : undefined,
+    recipeInputs: e.recipeInputs?.trim(),
+    recipeOutput: e.recipeOutput?.trim(),
+    equipSlot: e.equipSlot,
     notes: (e.notes || defaultNotes(e.category)).trim(),
     about: e.about?.trim(),
   };
