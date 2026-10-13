@@ -16,16 +16,8 @@ export type QualityId = "worn" | "common" | "fine" | "rare" | "epic" | "legendar
 export type RaceId = "vesper" | "cinder" | "tide" | "thorn" | "rime";
 export type MapId = "world" | "crypt" | "kiln";
 export type FxId =
-  | "voidring"
-  | "solarnova"
-  | "tidalsurge"
-  | "briarburst"
-  | "whitestorm"
-  | "gravepulse"
-  | "stormcrown"
-  | "lanternwake"
-  | "featherfall"
-  | "bloodmoon";
+  | "voidring" | "solarnova" | "tidalsurge" | "briarburst" | "whitestorm"
+  | "gravepulse" | "stormcrown" | "lanternwake" | "featherfall" | "bloodmoon";
 
 export type ClassId =
   | "warden" | "pyromancer" | "tidecaller" | "briarmage" | "frostblade"
@@ -55,7 +47,6 @@ export const CLASSES = [
   { id: "plaguebearer" as const, name: "Plaguebearer", type: "earth" as const, blurb: "The garden turns foul.", specialty: "Poison roots and sleep", starterMoves: ["spore", "vine", "root"], sprite: 18 },
   { id: "chronomancer" as const, name: "Chronomancer", type: "void" as const, blurb: "Steals the next second.", specialty: "Priority and silence", starterMoves: ["veilstep", "whiteout", "lantern"], sprite: 19 },
 ];
-
 export const CLASS_BY_ID = Object.fromEntries(CLASSES.map(c => [c.id, c])) as Record<ClassId, (typeof CLASSES)[number]>;
 
 export const TILE = 32;
@@ -68,18 +59,13 @@ export function scaleTile(tx: number, ty: number) {
     ty: Math.max(3, Math.min(WORLD_H - 4, Math.round(ty * (WORLD_H / 60)))),
   };
 }
-
 export function levelNearHunter(hunter: number, roll: number): number {
-  const delta = Math.floor(roll * 11) - 5;
-  return Math.max(1, Math.floor(hunter) + delta);
+  return Math.max(1, Math.floor(hunter) + Math.floor(roll * 11) - 5);
 }
-
 export function rarityForLevel(level: number, roll: number, boss = false): number {
   if (boss) return 3;
   const t = Math.max(0, Math.min(1, (level - 1) / 40));
-  const epic = 0.04 + t * 0.28;
-  const rare = 0.1 + t * 0.24;
-  const uncommon = 0.2 + t * 0.16;
+  const epic = 0.04 + t * 0.28, rare = 0.1 + t * 0.24, uncommon = 0.2 + t * 0.16;
   if (roll < epic) return 3;
   if (roll < epic + rare) return 2;
   if (roll < epic + rare + uncommon) return 1;
@@ -99,9 +85,7 @@ export const TYPES: Record<TypeId, { name: string; color: string; strong: TypeId
   spirit: { name: "Spirit", color: "#c9a6e8", strong: ["spirit", "ice"], weak: ["void"], immune: ["normal"] },
   ghoul: { name: "Ghoul", color: "#8d72a8", strong: ["spirit", "void"], weak: ["light", "fire"], immune: [] },
 };
-
 export const TYPE_IDS = Object.keys(TYPES) as TypeId[];
-
 export function typeMult(atk: TypeId, def: TypeId): number {
   if (TYPES[def].immune.includes(atk)) return 0;
   if (TYPES[atk].strong.includes(def)) return 2;
@@ -112,13 +96,11 @@ export function typeMult(atk: TypeId, def: TypeId): number {
 export type AttackForm = "melee" | "ranged" | "spell";
 export type ReactKind = "strike" | "counter" | "move" | "roll" | "guard" | "heal";
 export type Tactic = "strike" | "blink" | "ward" | "lunge" | "heavy" | "channel" | "heal" | "roll";
-
 export type Move = {
   id: string; name: string; type: TypeId; power: number; accuracy: number; crit: number;
   priority: number; effect: string; anim: string[]; range: number; about: string;
   tactic?: Tactic; react?: ReactKind; fail?: number;
 };
-
 export function moveTactic(m: Move): Tactic {
   if (m.tactic) return m.tactic;
   if (m.effect === "mend") return "heal";
@@ -127,11 +109,11 @@ export function moveTactic(m: Move): Tactic {
 }
 export function reactOf(m: Move): ReactKind {
   if (m.react) return m.react;
-  const tactic = moveTactic(m);
-  if (tactic === "roll") return "roll";
-  if (tactic === "blink" || tactic === "lunge") return "move";
-  if (tactic === "ward") return "guard";
-  if (tactic === "heal") return "heal";
+  const t = moveTactic(m);
+  if (t === "roll") return "roll";
+  if (t === "blink" || t === "lunge") return "move";
+  if (t === "ward") return "guard";
+  if (t === "heal") return "heal";
   return "strike";
 }
 export function defenseFail(m: Move, fatigue: number): number {
@@ -141,15 +123,14 @@ export function defenseFail(m: Move, fatigue: number): number {
   return Math.min(82, Math.round(base + Math.max(0, fatigue) * 14));
 }
 export function rollCover(traveled: number, reach: number): number {
-  const need = Math.max(40, reach * 0.38);
-  return Math.max(0, Math.min(1, traveled / need));
+  return Math.max(0, Math.min(1, traveled / Math.max(40, reach * 0.38)));
 }
 
 export const MOVES: Move[] = [
   { id: "wail", name: "First Wail", type: "fire", power: 30, accuracy: 100, crit: 6, priority: 2, effect: "none", anim: ["beam", "spark"], range: 120, about: "A thin cry that still burns." },
   { id: "ember", name: "Ember Trail", type: "fire", power: 42, accuracy: 95, crit: 12, priority: 1, effect: "burn", anim: ["beam", "spark", "burst"], range: 130, about: "Leaves a burning stitch." },
   { id: "cinder", name: "Cinder Bite", type: "fire", power: 55, accuracy: 85, crit: 18, priority: 0, effect: "burn", anim: ["slash", "spark", "burst"], range: 48, about: "Close, cruel, and hot." },
-  { id: "grin", name: "Glass Grin", type: "fire", power: 48, accuracy: 90, crit: 28, priority: 1, effect: "expose", anim: ["slash", "prism"], range: 52, about: "A smiling cut that opens guard." },
+  { id: "grin", name: "Glass Grin", type: "fire", power: 48, accuracy: 90, crit: 28, priority: 1, effect: "expose", anim: ["slash", "prism"], range: 52, about: "A smiling cut." },
   { id: "soak", name: "Drip Hex", type: "water", power: 32, accuracy: 100, crit: 6, priority: 1, effect: "soak", anim: ["rain", "spiral"], range: 120, about: "Soaks the joints." },
   { id: "brine", name: "Brine Lash", type: "water", power: 52, accuracy: 86, crit: 14, priority: 0, effect: "soak", anim: ["slash", "rain"], range: 70, about: "Salt that bites twice." },
   { id: "leech", name: "Sip Vein", type: "water", power: 36, accuracy: 95, crit: 8, priority: 1, effect: "leech", anim: ["beam", "orbit"], range: 100, about: "Drinks a little life back." },
@@ -189,31 +170,22 @@ export const MOVES: Move[] = [
   { id: "briaroll", name: "Briar Roll", type: "earth", power: 10, accuracy: 100, crit: 6, priority: 3, effect: "none", anim: ["spiral", "slash"], range: 90, about: "A thorn nick on the way through.", tactic: "roll", react: "roll", fail: 18 },
   { id: "tidemend", name: "Tide Mend", type: "water", power: 28, accuracy: 100, crit: 0, priority: 2, effect: "mend", anim: ["rain", "shield"], range: 40, about: "Drink the fight back.", tactic: "heal", react: "heal" },
 ];
-
 export const MOVE_BY_ID: Record<string, Move> = Object.fromEntries(MOVES.map(m => [m.id, m]));
 
-// Gems system
+// Gems
 export type GemId = string;
 export type Enchant = { id: string; name: string; effect: string; value?: number };
-export type Gem = {
-  id: GemId; moveId: string; name: string; type: TypeId; quality: QualityId;
-  enchantments: Enchant[]; unlocked: boolean;
-};
+export type Gem = { id: GemId; moveId: string; name: string; type: TypeId; quality: QualityId; enchantments: Enchant[]; unlocked: boolean };
 export const MAX_GEMS = 5;
 export const MAX_ENCHANTS_PER_GEM = 10;
 export const SKILL_POINTS_PER_LEVEL = 3;
 export function gemUnlockCost(quality: QualityId): number {
-  const table: Record<QualityId, number> = { worn: 1, common: 2, fine: 3, rare: 5, epic: 8, legendary: 12 };
-  return table[quality] ?? 2;
+  return ({ worn: 1, common: 2, fine: 3, rare: 5, epic: 8, legendary: 12 } as Record<QualityId, number>)[quality] ?? 2;
 }
 export function makeGem(moveId: string, quality: QualityId = "common", enchants: Enchant[] = []): Gem {
   const m = MOVE_BY_ID[moveId];
   if (!m) throw new Error("unknown move " + moveId);
-  return {
-    id: `gem_${moveId}_${Math.random().toString(36).slice(2, 8)}`,
-    moveId, name: m.name, type: m.type, quality,
-    enchantments: enchants.slice(0, MAX_ENCHANTS_PER_GEM), unlocked: false,
-  };
+  return { id: `gem_${moveId}_${Math.random().toString(36).slice(2, 8)}`, moveId, name: m.name, type: m.type, quality, enchantments: enchants.slice(0, MAX_ENCHANTS_PER_GEM), unlocked: false };
 }
 export function allSpellGems() {
   return MOVES.map(m => ({ moveId: m.id, name: m.name, type: m.type, effect: m.effect, about: m.about }));
@@ -286,7 +258,7 @@ export function learnPool(level: number, classOrRace: ClassId | RaceId): string[
   return MOVES.filter(m => m.power <= 22 + level * 2.2 || m.type === type || m.type === "normal").map(m => m.id);
 }
 
-// Compat Gear (armor removed conceptually; needed for engine boot)
+// Compat Gear
 export type Gear = {
   uid: string; id: string; name: string; slot: Slot; type: TypeId; quality: QualityId;
   level: number; style: number; fxSeed: number; moves: string[];
@@ -364,8 +336,28 @@ export const ITEMS: ItemDef[] = [
 export const ITEM_BY_ID = Object.fromEntries(ITEMS.map(i => [i.id, i]));
 export type QuestDef = { id: string; name: string };
 export const QUESTS: QuestDef[] = [];
-export type NpcDef = { id: string; name: string; about?: string; role?: string };
-export const NPCS: NpcDef[] = [];
+
+export type NpcDef = {
+  id: string; name: string; about?: string; role?: string; map?: MapId;
+  type?: TypeId; companion?: boolean; shop?: string | null; shrine?: TypeId | null;
+};
+export const NPCS: NpcDef[] = [
+  { id: "vell", name: "Sister Vell", role: "Chapel nun", map: "world", type: "light", companion: true },
+  { id: "moth", name: "Moth Adel", role: "Salt trader", map: "world", type: "void", shop: "general" },
+  { id: "quinn", name: "Quinn Vale", role: "Huntress", map: "world", type: "air", companion: true },
+  { id: "harrow", name: "Harrow Nia", role: "Gravekeeper", map: "world", type: "spirit" },
+  { id: "pell", name: "Pell the Quiet", role: "Shrine tender", map: "world", type: "water", shrine: "water" },
+];
+/** What an NPC can offer the player in the proximity prompt. */
+export function npcOffers(n: NpcDef): string[] {
+  const offers: string[] = [];
+  if (n.shop) offers.push("Trade");
+  if (n.shrine) offers.push("Shrine");
+  if (n.companion) offers.push("Companionship");
+  if (!offers.length) offers.push("Talk");
+  return offers;
+}
+
 export type Poi = { id: string; name: string; tx: number; ty: number; map?: MapId };
 export const POIS: Poi[] = [];
 export const STARTER_MOVES: Record<string, string[]> = {
