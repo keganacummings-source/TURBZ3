@@ -16,6 +16,13 @@ import type { AtlasSpec, AtlasKeyEntry } from "./sprite-atlas";
 export const ACTOR_FRAME_W = 16;
 export const ACTOR_FRAME_H = 18;
 export const ACTOR_WALK_FRAMES = 3;
+const WALK_CYCLE = [1, 0, 1, 2] as const;
+
+/** walk advances six beats per second; the center frame is the standing pose. */
+export function actorWalkFrame(walk: number, moving = true): number {
+  if (!moving) return 1;
+  return WALK_CYCLE[Math.floor(Math.abs(walk)) % WALK_CYCLE.length]!;
+}
 export const ACTOR_ROWS = 4;
 
 const BLOCK_W = ACTOR_FRAME_W * ACTOR_WALK_FRAMES; // 48

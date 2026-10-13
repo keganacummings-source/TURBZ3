@@ -29,6 +29,12 @@ export type TileCatalog = {
 const imgCache = new Map<string, HTMLImageElement>();
 let catalogPromise: Promise<TileCatalog | null> | null = null;
 let catalog: TileCatalog | null = null;
+let imageRevision = 0;
+
+/** Invalidate terrain painted with placeholders when a tile finishes loading. */
+export function tileImageRevision(): number {
+  return imageRevision;
+}
 
 export function loadTileCatalog(): Promise<TileCatalog | null> {
   if (catalog) return Promise.resolve(catalog);
@@ -52,6 +58,7 @@ export function tileImage(path: string): HTMLImageElement {
   if (!img) {
     img = new Image();
     img.decoding = "async";
+    img.onload = img.onerror = () => { imageRevision++; };
     img.src = path;
     imgCache.set(path, img);
   }

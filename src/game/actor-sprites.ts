@@ -8,7 +8,7 @@ import { loadAtlas, drawAtlasSprite, type Atlas } from "./sprite-atlas";
 import {
   ACTOR_ATLASES,
   ACTOR_SPRITE_SCALE,
-  ACTOR_WALK_FRAMES,
+  actorWalkFrame,
   CLASS_SLOTS,
   NPC_BAND,
   NPC_SHEET,
@@ -73,12 +73,12 @@ export function tryDrawActorSprite(ctx: CanvasRenderingContext2D, a: ActorDraw):
 
   if (a.setOn && a.setFx) drawSetAura(ctx, a.x, a.y, a.setFx, fxT, s / ACTOR_SPRITE_SCALE);
 
-  const step = Math.floor(a.walk * 6) % ACTOR_WALK_FRAMES;
+  const step = actorWalkFrame(a.walk, a.moving ?? a.walk > 0.2);
   const key = spriteKey(slot, ACTOR_DIRECTION_ROWS[a.direction ?? "down"], Math.abs(step));
 
   ctx.save();
   ctx.translate(a.x, a.y);
-  const bob = Math.sin(a.walk * 8) * (a.walk > 0.2 ? 1.2 : 0.25);
+  const bob = a.moving === false ? 0 : Math.sin(a.walk * Math.PI / 2) * 0.5;
   ctx.translate(0, bob);
   if (a.attack > 0) ctx.translate(4 * a.attack, 0);
 

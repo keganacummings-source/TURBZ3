@@ -556,20 +556,17 @@ export class TurbzGame {
 		o.start();
 		o.stop(this.audio.currentTime + dur);
 	}
+	viewport = { w: 1, h: 1, dpr: 1 };
+	moving = false;
 	resize() {
 		const dpr = Math.min(1.75, window.devicePixelRatio || 1);
 		const r = this.canvas.getBoundingClientRect();
 		this.canvas.width = Math.max(1, Math.floor(r.width * dpr));
 		this.canvas.height = Math.max(1, Math.floor(r.height * dpr));
+		this.viewport = { w: r.width, h: r.height, dpr: this.canvas.width / Math.max(1, r.width) };
 	}
 	cssSize() {
-		const r = this.canvas.getBoundingClientRect();
-		const dpr = this.canvas.width / Math.max(1, r.width);
-		return {
-			w: r.width,
-			h: r.height,
-			dpr
-		};
+		return this.viewport;
 	}
 	screenToWorld(cx, cy) {
 		const r = this.canvas.getBoundingClientRect();
@@ -906,6 +903,7 @@ export class TurbzGame {
 		return this.keys.has(code) || this.qa.has(code);
 	}
 	tickPlayer(dt) {
+		this.moving = false;
 		const save = this.save;
 		this.clock += dt;
 		const rooted = this.typing() || this.status.some((s) => (s.id === "root" || s.id === "sleep") && s.t > 0);
@@ -991,6 +989,7 @@ export class TurbzGame {
 		const hit = (x, y) => blocked(world, x, y) || blocked(world, x - 7, y) || blocked(world, x + 7, y) || blocked(world, x, y - 6);
 		if (!hit(save.x + dx, save.y)) save.x += dx;
 		if (!hit(save.x, save.y + dy)) save.y += dy;
+		this.moving ||= save.x !== x || save.y !== y;
 		this.direction = directionFromDelta(save.x - x, save.y - y, this.direction);
 		if (save.x !== x) this.facing = save.x < x ? -1 : 1;
 	}
@@ -4307,6 +4306,7 @@ export class TurbzGame {
 			race: save.race,
 			classId: save.classId,
 			direction: this.direction,
+			moving: this.moving && !this.dead && snap.panel !== "pause",
 			female: true,
 			hair: race.hair,
 			skin: RACES.findIndex((r) => r.id === save.race),

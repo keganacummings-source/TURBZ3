@@ -1,4 +1,4 @@
-import { drawAtlasTile } from "./tile-atlas";
+import { drawAtlasTile, tileImageRevision } from "./tile-atlas";
 import {
   ANIMAL_BIOME,
   ANIMAL_BY_ID,
@@ -571,8 +571,65 @@ export function paintWorld(world: WorldData): HTMLCanvasElement {
   return c;
 }
 
-/** Paint only the camera window. The overworld is too large for one bitmap. */
+type TerrainWindow = {
+  canvas: HTMLCanvasElement;
+  left: number;
+  top: number;
+  revision: number;
+  tiles: Tile[];
+};
+// One bounded window per world; abandoned worlds and their canvases can be collected.
+const terrainWindows = new WeakMap<WorldData, TerrainWindow>();
+
+/** Reuse static terrain until the camera approaches its edge or new art loads. */
 export function drawWorldSlice(
+  ctx: CanvasRenderingContext2D,
+  world: WorldData,
+  camX: number,
+  camY: number,
+  viewW: number,
+  viewH: number,
+  zoom: number,
+): void {
+  const z = Math.max(0.2, zoom);
+  const w = viewW / z;
+  const h = viewH / z;
+  const pad = 150;
+  const width = Math.ceil((w + pad * 2) / TILE) * TILE;
+  const height = Math.ceil((h + pad * 2) / TILE) * TILE;
+  // Bound bitmap memory for extremely large displays / far zooms.
+  if (width * height > 4 * 1024 * 1024) {
+    paintWorldSlice(ctx, world, camX, camY, viewW, viewH, zoom);
+    return;
+  }
+  const revision = tileImageRevision();
+  let cached = terrainWindows.get(world);
+  const inset = 80; // Retain room for canopies, shrines and screen shake.
+  if (!cached || cached.revision !== revision || cached.tiles !== world.tiles ||
+      cached.canvas.width !== width || cached.canvas.height !== height ||
+      camX - w / 2 < cached.left + inset ||
+      camY - h / 2 < cached.top + inset ||
+      camX + w / 2 > cached.left + width - inset ||
+      camY + h / 2 > cached.top + height - inset) {
+    const canvas = cached?.canvas ?? document.createElement("canvas");
+    if (canvas.width !== width) canvas.width = width;
+    if (canvas.height !== height) canvas.height = height;
+    const g = canvas.getContext("2d")!;
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, width, height);
+    const left = Math.floor((camX - w / 2 - pad) / TILE) * TILE;
+    const top = Math.floor((camY - h / 2 - pad) / TILE) * TILE;
+    g.imageSmoothingEnabled = false;
+    g.translate(-left, -top);
+    paintWorldSlice(g, world, left + width / 2, top + height / 2, width, height, 1);
+    cached = { canvas, left, top, revision, tiles: world.tiles };
+    terrainWindows.set(world, cached);
+  }
+  ctx.drawImage(cached.canvas, cached.left, cached.top);
+}
+
+/** Paint only the camera window. The overworld is too large for one bitmap. */
+function paintWorldSlice(
   ctx: CanvasRenderingContext2D,
   world: WorldData,
   camX: number,

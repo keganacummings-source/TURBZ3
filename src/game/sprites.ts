@@ -42,6 +42,7 @@ export type ActorDraw = {
   skin: number;
   facing: number;
   direction?: "up" | "right" | "down" | "left";
+  moving?: boolean;
   walk: number;
   attack: number;
   hurt: number;

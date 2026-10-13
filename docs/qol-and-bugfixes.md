@@ -41,3 +41,14 @@
 These changes preserve the previous class, sprite, builder, progression, dungeon
 and survival updates. Multiplayer still requires live two-player verification;
 this pass verifies individual engine operations and local UI behavior.
+
+
+## Smoother rendering and animation
+
+- Static terrain now uses one bounded camera-window bitmap instead of repainting
+  every visible tile on every frame. It refreshes near the edge, on resize, and
+  when tile images finish loading; distant zooms avoid oversized allocations.
+- Canvas dimensions are read on resize instead of forcing a layout read each frame.
+- Walking sprites use the center/left/center/right cycle at the existing movement
+  beat rate, rather than multiplying that rate again. Stopped, blocked and rooted
+  players display the standing pose.

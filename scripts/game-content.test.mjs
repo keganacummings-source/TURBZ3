@@ -357,3 +357,63 @@ test('quick meal chooses the smallest sufficient portion or largest available wi
   assert.equal(itemUse.bestFood({}, 0), null);
   assert.equal(bag.cooked_meat, 2);
 });
+
+
+test("actor walk cycle uses both steps and returns to standing without rapid frame skipping", () => {
+  assert.deepEqual([0, 1, 2, 3, 4].map(n => sheets.actorWalkFrame(n)), [1, 0, 1, 2, 1]);
+  assert.equal(sheets.actorWalkFrame(0.99), 1);
+  assert.equal(sheets.actorWalkFrame(1.01), 0);
+  assert.equal(sheets.actorWalkFrame(7.5, false), 1);
+});
+
+test("terrain window reuses paint, refreshes at edges and asset loads, and bounds memory", () => {
+  const previous = { document: globalThis.document, Image: globalThis.Image };
+  let paints = 0, blits = 0, canvases = 0;
+  const images = [];
+  const context = () => new Proxy({}, {
+    get: (target, key) => key in target ? target[key] : (...args) => { paints++; },
+  });
+  globalThis.Image = class {
+    complete = false; naturalWidth = 0;
+    constructor() { images.push(this); }
+  };
+  globalThis.document = { createElement: () => {
+    canvases++;
+    const ctx = context();
+    return { width: 0, height: 0, getContext: () => ctx };
+  }};
+  const ctx = context();
+  ctx.drawImage = () => { blits++; };
+  const map = { w: 64, h: 64, tiles: Array.from({ length: 4096 }, () => ({ floor: 0, biome: 2, block: 0, decor: 0, sprite: "/qa/terrain.png" })), spawns: [], cache: null };
+  const draw = (x = 512, width = 320, zoom = 2) => world.drawWorldSlice(ctx, map, x, 512, width, 240, zoom);
+  try {
+    draw();
+    const first = paints;
+    assert.ok(first > 0);
+    draw(); draw(520);
+    assert.equal(paints, first, "stationary / nearby views repaint no terrain");
+    assert.equal(blits, 3);
+    draw(800);
+    assert.ok(paints > first, "moving beyond cached edge repaints");
+    const edge = paints;
+    images[0].onload();
+    draw(800);
+    assert.ok(paints > edge, "newly loaded art replaces cached placeholders");
+    const loaded = paints;
+    map.tiles = [...map.tiles];
+    draw(800);
+    assert.ok(paints > loaded, "replacement terrain invalidates the cache");
+    draw(800, 640);
+    assert.equal(canvases, 1, "resize reuses the bounded bitmap");
+    const before = paints;
+    draw(800, 4000, 0.2);
+    assert.ok(paints > before);
+    assert.equal(canvases, 1, "far zoom uses direct painting instead of a huge bitmap");
+    const other = { ...map };
+    world.drawWorldSlice(ctx, other, 512, 512, 320, 240, 2);
+    assert.equal(canvases, 2, "worlds have independent caches");
+  } finally {
+    globalThis.document = previous.document;
+    globalThis.Image = previous.Image;
+  }
+});
