@@ -135,9 +135,26 @@ export function parseMapJson(raw: unknown): MapFile {
   const w = Number(m.w) | 0;
   const h = Number(m.h) | 0;
   if (w < 4 || h < 4 || w > 512 || h > 512) throw new Error("Map size out of range");
-  const tilesIn = m.tiles;
-  if (!Array.isArray(tilesIn) || tilesIn.length !== w * h) throw new Error("tiles array size mismatch");
-  const tiles: MapTile[] = tilesIn.map((t) => {
+  let tilesIn = m.tiles as unknown;
+  // Support RLE compact maps: tilesRle = [count, floor, biome, block, decor, sprite][]
+  if ((!Array.isArray(tilesIn) || (tilesIn as unknown[]).length !== w * h) && Array.isArray(m.tilesRle)) {
+    const expanded: Record<string, unknown>[] = [];
+    for (const row of m.tilesRle as unknown[]) {
+      if (!Array.isArray(row) || row.length < 5) continue;
+      const count = Math.max(0, Number(row[0]) | 0);
+      const tile = {
+        floor: Number(row[1]) | 0,
+        biome: Number(row[2]) | 0,
+        block: Number(row[3]) | 0,
+        decor: Number(row[4]) | 0,
+        sprite: typeof row[5] === "string" ? row[5] : undefined,
+      };
+      for (let i = 0; i < count; i++) expanded.push(tile);
+    }
+    tilesIn = expanded;
+  }
+  if (!Array.isArray(tilesIn) || (tilesIn as unknown[]).length !== w * h) throw new Error("tiles array size mismatch");
+  const tiles: MapTile[] = (tilesIn as unknown[]).map((t) => {
     const o = (t && typeof t === "object" ? t : {}) as Record<string, unknown>;
     return {
       floor: Number(o.floor) | 0,
@@ -173,4 +190,15 @@ export function downloadMapFile(map: MapFile) {
   a.download = `${map.id || "map"}.json`;
   a.click();
   URL.revokeObjectURL(a.href);
+}
+
+export async function fetchMapFile(id: string): Promise<MapFile | null> {
+  try {
+    const res = await fetch(`/Maps/${id}.json`, { cache: "force-cache" });
+    if (!res.ok) return null;
+    const raw = await res.json();
+    return parseMapJson(raw);
+  } catch {
+    return null;
+  }
 }
