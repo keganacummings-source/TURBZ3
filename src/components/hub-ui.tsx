@@ -107,6 +107,7 @@ export function Hub(props: {
   onHard: () => void;
   onBoards: () => void;
   onOptions: () => void;
+  onDesigner: () => void;
 }) {
   return (
     <div className="flex h-full items-center justify-center overflow-auto p-3 pb-24">
@@ -127,11 +128,12 @@ export function Hub(props: {
           <button className="px-btn" onClick={props.onBoards}>
             Leaderboards
           </button>
+          <button className="px-btn" onClick={props.onDesigner}>Designer Mode</button>
           <button className="px-btn" onClick={props.onOptions}>
             Options
           </button>
         </div>
-        <p className="mt-4 text-dim">Hunt is the wilds. Circle is six against six. Hardcore is the skill grind, and the witch parties strike first.</p>
+        <p className="mt-4 text-dim">Hunt explores the rebuilt wilds. Circle is six against six. Hardcore is a separate frontier: hunt, gather water, build campfires, and survive hunger, thirst and fatigue.</p>
       </div>
     </div>
   );
@@ -312,7 +314,7 @@ export function Options({ username, onBack }: { username: string; onBack: () => 
             ))}
           </div>
         </div>
-        <p className="mt-4 text-dim">Right-click in the wilds for the bag. Hardcore fights wait on your verse. Rolls and counters can slip.</p>
+        <p className="mt-4 text-dim">Right-click in the wilds for Bag and Verses. In Hardcore, open Survival & Camp for chopping, cooking, purified water and sleep. Healing spells mend lasting wounds.</p>
         <button className="px-btn mt-4" type="button" onClick={onBack}>
           Back to the veil
         </button>

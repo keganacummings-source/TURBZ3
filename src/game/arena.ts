@@ -24,6 +24,7 @@ import {
   type TypeId,
   typeMult,
 } from "./content";
+import { directionFromDelta, type ActorDirection } from "./actor-sheets.config";
 import type { GraveBody } from "./social-types";
 import { drawActor, drawMonster, drawShadowName } from "./sprites";
 
@@ -153,6 +154,7 @@ type Fighter = {
   max: number;
   speed: number;
   facing: number;
+  direction: ActorDirection;
   walk: number;
   hurt: number;
   cd: number;
@@ -884,6 +886,7 @@ export class WitchArena {
       max: w.maxHp,
       speed: w.speed,
       facing: side === 0 ? 1 : -1,
+      direction: side === 0 ? "right" : "left",
       walk: 0,
       hurt: 0,
       cd: 0.3 + Math.random() * 0.4,
@@ -1114,8 +1117,7 @@ export class WitchArena {
     const mag = Math.hypot(dx, dy) || 1;
     const speed = f.speed * (mud ? 0.55 : 1) * (f.role === "spirit" ? 1.05 : 1);
     this.slide(f, (dx / mag) * speed * dt, (dy / mag) * speed * dt);
-    if (dx < -1) f.facing = -1;
-    else if (dx > 1) f.facing = 1;
+
   }
 
   private slide(f: Fighter, dx: number, dy: number): void {
@@ -1125,8 +1127,12 @@ export class WitchArena {
       if (tx < 0 || ty < 0 || tx >= this.gw || ty >= this.gh) return true;
       return this.grid[ty * this.gw + tx] === 1;
     };
+    const x = f.x;
+    const y = f.y;
     if (!blocked(f.x + dx, f.y)) f.x += dx;
     if (!blocked(f.x, f.y + dy)) f.y += dy;
+    f.direction = directionFromDelta(f.x - x, f.y - y, f.direction);
+    if (f.x !== x) f.facing = f.x < x ? -1 : 1;
   }
 
   private strike(f: Fighter): void {
@@ -1440,6 +1446,7 @@ export class WitchArena {
           x: f.x,
           y: f.y,
           race: f.race,
+          direction: f.direction,
           female: true,
           hair: f.hair,
           skin: f.skin,

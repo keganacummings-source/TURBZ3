@@ -8,10 +8,10 @@
 //   - two bands per sheet, y = 180 and y = 306
 //       core / second : band 180 male art, band 306 female art
 //       third         : band 180 elementals, band 306 npc art
-//   - the flat tan sheet background is chroma-keyed out
-// Rows run 0 down, 1 left, 2 right, 3 up.
+//   - each band has its own flat background color, chroma-keyed per frame
+// Antifarea rows run 0 up, 1 right, 2 down, 3 left.
 
-import type { AtlasSpec } from "./sprite-atlas";
+import type { AtlasSpec, AtlasKeyEntry } from "./sprite-atlas";
 
 export const ACTOR_FRAME_W = 16;
 export const ACTOR_FRAME_H = 18;
@@ -24,13 +24,25 @@ const BAND_TOP = 180;
 const BAND_BOTTOM = 306;
 
 export const ACTOR_BG: [number, number, number] = [239, 208, 116];
-export const ACTOR_TOLERANCE = 12;
+export const ACTOR_TOLERANCE = 0;
 export const ACTOR_SPRITE_SCALE = 3.4;
 
-export const ROW_DOWN = 0;
-export const ROW_LEFT = 1;
-export const ROW_RIGHT = 2;
-export const ROW_UP = 3;
+export const ROW_UP = 0;
+export const ROW_RIGHT = 1;
+export const ROW_DOWN = 2;
+export const ROW_LEFT = 3;
+
+export const ACTOR_DIRECTION_ROWS = { up: ROW_UP, right: ROW_RIGHT, down: ROW_DOWN, left: ROW_LEFT } as const;
+
+export type ActorDirection = keyof typeof ACTOR_DIRECTION_ROWS;
+
+/** Keep the last facing when stopped; use actual movement after collision. */
+export function directionFromDelta(dx: number, dy: number, previous: ActorDirection = "down"): ActorDirection {
+  if (Math.hypot(dx, dy) < 0.001) return previous;
+  return Math.abs(dx) >= Math.abs(dy)
+    ? (dx < 0 ? "left" : "right")
+    : (dy < 0 ? "up" : "down");
+}
 
 export type SheetId = "core" | "second" | "third";
 export type BandId = "m" | "f" | "a" | "b";
@@ -60,7 +72,7 @@ function bandY(band: BandId): number {
 // Every frame of every character becomes its own atlas rect, so a draw call
 // never has to do arithmetic and can never mis-slice a neighbouring frame.
 function buildSpec(id: SheetId): AtlasSpec {
-  const sprites: Record<string, { x: number; y: number; w: number; h: number }> = {};
+  const sprites: Record<string, AtlasKeyEntry> = {};
   for (const band of SHEET_BANDS[id]) {
     for (let index = 0; index < SLOTS_PER_BAND; index++) {
       for (let row = 0; row < ACTOR_ROWS; row++) {
@@ -70,6 +82,7 @@ function buildSpec(id: SheetId): AtlasSpec {
             y: bandY(band) + row * ACTOR_FRAME_H,
             w: ACTOR_FRAME_W,
             h: ACTOR_FRAME_H,
+            chromaKey: id === "third" ? [254, 197, 197] : band === "m" ? [123, 213, 254] : [246, 139, 205],
           };
         }
       }
@@ -99,38 +112,39 @@ export const RACE_SLOTS: Record<string, CharacterSlot> = {
   rime: { sheet: "second", index: 3, gendered: true },
 };
 
-// All twenty classes, spread across the character sets on the sheets.
+// The ten playable classes use distinct characters from the sheets.
 export const CLASS_SLOTS: Record<string, CharacterSlot> = {
   warden: { sheet: "core", index: 0, gendered: true },
-  runesmith: { sheet: "core", index: 1, gendered: true },
-  spiritbinder: { sheet: "core", index: 2, gendered: true },
-  shadowdancer: { sheet: "core", index: 3, gendered: true },
-  skyarcher: { sheet: "core", index: 4, gendered: true },
-  chronomancer: { sheet: "second", index: 0, gendered: true },
-  bloodreaver: { sheet: "second", index: 1, gendered: true },
-  ghoulknight: { sheet: "second", index: 2, gendered: true },
-  ironclad: { sheet: "second", index: 3, gendered: true },
-  wildheart: { sheet: "second", index: 4, gendered: true },
-  aetherist: { sheet: "second", index: 5, gendered: true },
   pyromancer: { sheet: "third", index: 0, gendered: false, band: "a" },
   tidecaller: { sheet: "third", index: 1, gendered: false, band: "a" },
-  stormrider: { sheet: "third", index: 2, gendered: false, band: "a" },
   briarmage: { sheet: "third", index: 3, gendered: false, band: "a" },
-  lightbringer: { sheet: "third", index: 4, gendered: false, band: "a" },
+  frostblade: { sheet: "second", index: 3, gendered: true },
   voidwalker: { sheet: "third", index: 5, gendered: false, band: "a" },
-  gravekeeper: { sheet: "third", index: 0, gendered: false, band: "b" },
-  frostblade: { sheet: "third", index: 1, gendered: false, band: "b" },
-  plaguebearer: { sheet: "third", index: 3, gendered: false, band: "b" },
+  lightbringer: { sheet: "third", index: 4, gendered: false, band: "a" },
+  spiritbinder: { sheet: "core", index: 2, gendered: true },
+  ghoulknight: { sheet: "second", index: 2, gendered: true },
+  stormrider: { sheet: "third", index: 2, gendered: false, band: "a" },
 };
 
 export const NPC_SHEET: SheetId = "third";
 export const NPC_BAND: BandId = "b";
 export const NPC_SLOTS_BY_ID: Record<string, number> = {
-  vell: 1, // Sister Vell      -> nun
-  moth: 2, // Moth Adel        -> merchant
-  quinn: 4, // Quinn Vale      -> pirate
-  harrow: 0, // Harrow Nia     -> priest
-  pell: 3, // Pell the Quiet   -> cultist
+  miret: 1,
+  vey: 4,
+  orien: 0,
+  holt: 2,
+  lise: 3,
+  bram: 4,
+  ada: 1,
+  brask: 4,
+  wren: 5,
+  keel: 0,
+  pike: 3,
+  nessa: 2,
+  moss: 1,
+  brine: 0,
+  sleet: 4,
+  cinderkin: 3,
 };
 
 export function resolveSlot(slot: CharacterSlot, female: boolean): SpriteSlot {

@@ -41,8 +41,8 @@ export type AtlasGrid = {
 // or an explicit pixel rect. `frames` > 1 treats the cell as a horizontal
 // strip of animation frames (used for walk cycles).
 export type AtlasKeyEntry =
-  | ({ col: number; row: number } & { frames?: number })
-  | (AtlasRect & { frames?: number });
+  | ({ col: number; row: number } & { frames?: number; chromaKey?: [number, number, number] })
+  | (AtlasRect & { frames?: number; chromaKey?: [number, number, number] });
 
 export type AtlasSpec = {
   src: string;
@@ -57,6 +57,7 @@ export type Atlas = {
   rects: Record<string, AtlasRect>;
   frames: Record<string, number>;
   chromaKey: [number, number, number];
+  chromaKeys: Record<string, [number, number, number]>;
   tolerance: number;
   cache: Map<string, HTMLCanvasElement>;
 };
@@ -160,7 +161,10 @@ export async function loadAtlas(spec: AtlasSpec): Promise<Atlas> {
   const inset = spec.grid?.inset ?? 0;
   const rects: Record<string, AtlasRect> = {};
   const frames: Record<string, number> = {};
+  const chromaKeys: Record<string, [number, number, number]> = {};
   for (const [k, entry] of Object.entries(spec.sprites)) {
+    const keyColor = entry.chromaKey ?? chromaKey;
+    chromaKeys[k] = keyColor;
     let rect: AtlasRect;
     if ("col" in entry) {
       if (!spec.grid) throw new Error(`Atlas sprite "${k}" uses col/row but no grid is defined`);
@@ -169,7 +173,7 @@ export async function loadAtlas(spec: AtlasSpec): Promise<Atlas> {
       rect = { x: snap(entry.x), y: snap(entry.y), w: snap(entry.w), h: snap(entry.h) };
     }
     if (spec.grid?.tighten && rect.w > 0 && rect.h > 0) {
-      rect = tightenRect(image, rect, chromaKey, tolerance);
+      rect = tightenRect(image, rect, keyColor, tolerance);
     }
     if (inset > 0 && rect.w > 0 && rect.h > 0) {
       rect = {
@@ -182,7 +186,7 @@ export async function loadAtlas(spec: AtlasSpec): Promise<Atlas> {
     rects[k] = rect;
     frames[k] = entry.frames ?? 1;
   }
-  return { image, rects, frames, chromaKey, tolerance, cache: new Map() };
+  return { image, rects, frames, chromaKey, chromaKeys, tolerance, cache: new Map() };
 }
 
 export function getRect(atlas: Atlas, key: string): AtlasRect | null {
@@ -218,7 +222,7 @@ export function drawAtlasSprite(
   const cacheKey = totalFrames > 1 ? `${key}#${frame}` : key;
   let canvas = atlas.cache.get(cacheKey);
   if (!canvas) {
-    canvas = bakeSlice(atlas.image, src, atlas.chromaKey, atlas.tolerance);
+    canvas = bakeSlice(atlas.image, src, atlas.chromaKeys[key] ?? atlas.chromaKey, atlas.tolerance);
     atlas.cache.set(cacheKey, canvas);
   }
 

@@ -2,13 +2,16 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import { authClient } from "@/lib/auth/client";
 import { UserButton } from "@/lib/auth/gates";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
-import { RACES, TYPES, type RaceId, type TypeId } from "@/game/content";
+import { CLASSES, CLASS_RACE, RACES, TYPES, equipmentStats, type ClassId, type RaceId, type TypeId } from "@/game/content";
 import { loadCloudSave, writeCloudSave } from "@/game/cloud-client";
 import { bindCloud, cloudReady, ingestCloud, noteArena, noteHardcore, noteHunt, readArenaLocal } from "@/game/account-save";
 import { postGrave } from "@/game/social-client";
 import type { GraveBody } from "@/game/social-types";
+import { bestFood } from "@/game/item-use";
+import { DesignerMode } from "@/components/designer-mode";
 import { ArenaScreen } from "@/components/arena-ui";
 import { Boards, ChatDock, DuelBanner, Hub, Options } from "@/components/hub-ui";
+import { actorSpritesReady } from "@/game/actor-sprites";
 import { getSnap, subscribe, TurbzGame } from "@/game/engine";
 
 function useSnap() {
@@ -132,11 +135,12 @@ function Hunt() {
   const gameRef = useRef<TurbzGame | null>(null);
   const [create, setCreate] = useState(false);
   const [name, setName] = useState("Mira");
-  const [race, setRace] = useState<RaceId>("vesper");
+  const [classId, setClassId] = useState<ClassId>("warden");
+  const race = CLASS_RACE[classId];
   const [code, setCode] = useState("");
   const [intent, setIntent] = useState<"solo" | "host" | "join">("solo");
   const [chat, setChat] = useState("");
-  const [screen, setScreen] = useState<"hub" | "hunt" | "circle" | "hard" | "boards" | "options">("hub");
+  const [screen, setScreen] = useState<"hub" | "hunt" | "circle" | "hard" | "boards" | "options" | "designer">("hub");
   const [arenaSeed, setArenaSeed] = useState<unknown>(null);
   const [booted, setBooted] = useState(false);
 
@@ -194,7 +198,7 @@ function Hunt() {
     <main className="game-root">
       <canvas ref={canvasRef} className="game-canvas" aria-label="TURBZ wilds" />
       <div className="overlay">
-        <ChatDock username={username} playing={snap.mode === "play" && screen !== "hub"} />
+        {!create && screen !== "designer" && <ChatDock username={username} playing={snap.mode === "play" && screen !== "hub"} />}
         {screen === "hub" && snap.mode !== "play" && (
           <Hub
             username={username}
@@ -209,6 +213,7 @@ function Hunt() {
             }}
             onBoards={() => setScreen("boards")}
             onOptions={() => setScreen("options")}
+            onDesigner={() => setScreen("designer")}
           />
         )}
         {(screen === "hunt" || screen === "hard") && snap.mode !== "play" && !create && (
@@ -252,8 +257,8 @@ function Hunt() {
           <Create
             name={name}
             setName={setName}
-            race={race}
-            setRace={setRace}
+            classId={classId}
+            setClassId={setClassId}
             game={g()}
             onBack={() => setCreate(false)}
             onGo={() => {
@@ -261,7 +266,7 @@ function Hunt() {
                 intent === "solo"
                   ? undefined
                   : { role: intent === "host" ? ("host" as const) : ("guest" as const), code: code.trim() || makeCode() };
-              g()?.begin(name, race, lobby);
+              g()?.begin(name, race, lobby, classId);
               setCreate(false);
             }}
           />
@@ -269,6 +274,7 @@ function Hunt() {
         {snap.mode === "play" && screen !== "circle" && screen !== "boards" && screen !== "options" && (
           <Play snap={snap} game={g()} chat={chat} setChat={setChat} />
         )}
+        {screen === "designer" && snap.mode !== "play" && <DesignerMode onBack={() => setScreen("hub")} />}
         {screen === "circle" && (
           <ArenaScreen
             seed={arenaSeed}
@@ -310,10 +316,10 @@ function Title(props: {
     <div className="flex h-full items-center justify-center overflow-auto p-3 pb-20">
       <div className="screen-card px-panel my-auto w-full max-w-xl p-4 sm:p-5">
         <p className="font-display text-xs text-blood">{hard ? "HARDCORE" : "TURBOHUNT"}</p>
-        <h1 className="font-display mt-3 text-lg text-bone sm:text-2xl">{hard ? "Skill grind" : "The hunt"}</h1>
+        <h1 className="font-display mt-3 text-lg text-bone sm:text-2xl">{hard ? "The frontier" : "The hunt"}</h1>
         <p className="mt-3 text-dim">
           {hard
-            ? "Open wilds. Skills climb faster than the body. Witch parties are weaker than a lone huntress, two to ten witches and one to five summoners. They strike first. You answer before the verse lands."
+            ? "A separate wilderness. Hunger, thirst and sleep drain during active play. Hunt or buy food, chop logs, cook on campfires and purify gathered water. Only healing spells mend lasting wounds. Death takes this body, even in dungeons."
             : "Die and you must choose a new witch. A finished set of her blood can be worn again. Otherwise you wake in the default robes, at another tavern, beside the bounty board."}
         </p>
         <div className="mt-5 grid gap-2">
@@ -368,17 +374,17 @@ function Title(props: {
 function Create(props: {
   name: string;
   setName: (v: string) => void;
-  race: RaceId;
-  setRace: (r: RaceId) => void;
+  classId: ClassId;
+  setClassId: (id: ClassId) => void;
   game: TurbzGame | null;
   onBack: () => void;
   onGo: () => void;
 }) {
   return (
-    <div className="flex h-full items-center justify-center overflow-auto p-3 pb-20">
-      <div className="px-panel w-full max-w-3xl p-4">
-        <p className="font-display text-xs text-blood">CHOOSE A BODY</p>
-        <h2 className="font-display mt-2 text-sm text-bone">Five daughters of the veil</h2>
+    <div className="flex h-full items-start justify-center overflow-auto p-3 pb-20">
+      <div className="px-panel my-auto w-full max-w-3xl p-4">
+        <p className="font-display text-xs text-blood">CHOOSE A CLASS</p>
+        <h2 className="font-display mt-2 text-sm text-bone">Ten classes of the veil</h2>
         <label className="mt-3 block text-dim">
           Name
           <input
@@ -388,19 +394,19 @@ function Create(props: {
           />
         </label>
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
-          {RACES.map((r) => (
+          {CLASSES.map((r) => (
             <button
               key={r.id}
-              className={`border-2 p-2 text-left ${props.race === r.id ? "border-kyo bg-ink" : "border-bone bg-ink"}`}
-              onClick={() => props.setRace(r.id)}
+              className={`border-2 p-2 text-left ${props.classId === r.id ? "border-kyo bg-ink" : "border-bone bg-ink"}`}
+              onClick={() => props.setClassId(r.id)}
             >
-              <RaceCanvas race={r.id} game={props.game} active={props.race === r.id} />
-              <span className="font-display mt-2 block text-xs">{r.name}</span>
+              <RaceCanvas race={CLASS_RACE[r.id]} classId={r.id} game={props.game} active={props.classId === r.id} />
+              <span className="font-body mt-2 block break-words text-xl">{r.name}</span>
               <span className={`block ${typeClass(r.type)}`}>{TYPES[r.type].name}</span>
             </button>
           ))}
         </div>
-        <p className="mt-3 text-dim">{RACES.find((r) => r.id === props.race)?.blurb}</p>
+        <p className="mt-3 text-dim">{CLASSES.find((r) => r.id === props.classId)?.specialty}</p>
         <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
           <button className="px-btn" onClick={props.onBack}>
             Back
@@ -414,7 +420,7 @@ function Create(props: {
   );
 }
 
-function RaceCanvas({ race, game, active }: { race: RaceId; game: TurbzGame | null; active: boolean }) {
+function RaceCanvas({ race, classId, game, active }: { race: RaceId; classId: ClassId; game: TurbzGame | null; active: boolean }) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     const canvas = ref.current;
@@ -423,13 +429,12 @@ function RaceCanvas({ race, game, active }: { race: RaceId; game: TurbzGame | nu
     canvas.height = 140;
     let frame = 0;
     const draw = () => {
-      game.preview(canvas, race);
-      frame = requestAnimationFrame(draw);
+      game.preview(canvas, race, classId);
+      if (active || !actorSpritesReady()) frame = requestAnimationFrame(draw);
     };
-    if (active) frame = requestAnimationFrame(draw);
-    else game.preview(canvas, race);
+    frame = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(frame);
-  }, [race, game, active]);
+  }, [race, classId, game, active]);
   return <canvas ref={ref} width={120} height={140} className="h-28 w-full bg-ink" />;
 }
 
@@ -487,6 +492,13 @@ function Play({
           />
         </form>
       </div>
+        {snap.survival && <div className="survival-hud">
+          <button className="px-btn" onClick={() => game?.toggle("survival")}>Survival & Camp</button>
+          <p>Hunger {Math.ceil(snap.survival.hunger)} · Thirst {Math.ceil(snap.survival.thirst)} · Sleep {Math.ceil(snap.survival.rest)}</p>
+          {Math.min(snap.survival.hunger, snap.survival.thirst, snap.survival.rest) < 15 && <p className="text-blood">Supplies low. Empty reserves cause lasting damage.</p>}
+          {snap.sleeping && <button className="px-btn" onClick={() => game?.survivalAction("sleep")}>Sleeping · Wake up</button>}
+        </div>}
+
       {snap.hint && !snap.menu && !snap.panel && <div className="hint-chip px-panel">{snap.hint}</div>}
       {snap.duel && <DuelBanner duel={snap.duel} />}
       {snap.menu && (
@@ -518,7 +530,7 @@ function Play({
       <div className="dock">
         <div className="move-row">
           {snap.bar.map((move, i) => (
-            <button key={`${move.id}-${i}`} className="px-btn" onClick={() => game?.cast(i)}>
+            <button key={`${move.id}-${i}`} className="px-btn" title={snap.abilities.find(ability => ability.id === move.id)?.about} onClick={() => game?.cast(i)}>
               <span className={typeClass(move.type)}>{move.name}</span>
               <span className="block text-dim">{move.tag}</span>
               <span className="mt-1 block h-1 bg-ink">
@@ -540,7 +552,8 @@ function Play({
       </button>
       <Stick on={(x, y) => game?.setStick(x, y)} />
       {snap.panel && snap.panel !== "talk" && snap.panel !== "rebirth" && (
-        <Panel title={snap.panel} onClose={() => game?.closePanel()}>
+        <Panel title={snap.panel === "moves" ? "Verses · Attacks & Spells" : snap.panel} onClose={() => game?.closePanel()}>
+          {snap.panel === "survival" && <Survival snap={snap} game={game} />}
           {snap.panel === "bag" && <Bag snap={snap} game={game} />}
           {snap.panel === "skills" && <Skills snap={snap} game={game} />}
           {snap.panel === "quests" && (
@@ -554,7 +567,7 @@ function Play({
             </div>
           )}
           {snap.panel === "map" && <Mini snap={snap} game={game} />}
-          {snap.panel === "moves" && <Moves snap={snap} />}
+          {snap.panel === "moves" && <Moves snap={snap} game={game} />}
           {snap.panel === "ghost" && <Ghost snap={snap} game={game} />}
           {snap.panel === "bounty" && (
             <div className="grid gap-2">
@@ -570,7 +583,7 @@ function Play({
           {snap.panel === "pause" && (
             <div className="grid gap-2">
               <p>
-                Right-click, or Menu, opens the veil. Walk within two tiles of a node and it is harvested. Click a keeper only after you have walked up to them.
+                WASD / arrows: move. E: interact or gather. 1–9: cast. B/I: Bag. V: Verses. K: Skills. M: Map. H: Hardcore Survival. Escape: close or pause. Right-click or Menu opens more actions. Chat and search fields stop movement while typing.
               </p>
               {snap.roomCode && <p className="text-kyo">Lobby {snap.roomCode}</p>}
               <UserButton />
@@ -676,7 +689,8 @@ function Play({
 
 function Rebirth({ snap, game }: { snap: ReturnType<typeof getSnap>; game: TurbzGame | null }) {
   const [name, setName] = useState("Mira");
-  const [race, setRace] = useState<RaceId>("vesper");
+  const [classId, setClassId] = useState<ClassId>("warden");
+  const race = CLASS_RACE[classId];
   const [setId, setSetId] = useState<string | null>(null);
   const owned = snap.unlocked.filter((s) => s.race === race);
   return (
@@ -694,12 +708,12 @@ function Rebirth({ snap, game }: { snap: ReturnType<typeof getSnap>; game: Turbz
           />
         </label>
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
-          {RACES.map((r) => (
+          {CLASSES.map((r) => (
             <button
               key={r.id}
-              className={`border-2 p-2 text-left ${race === r.id ? "border-kyo bg-ink" : "border-bone bg-ink"}`}
+              className={`border-2 p-2 text-left ${classId === r.id ? "border-kyo bg-ink" : "border-bone bg-ink"}`}
               onClick={() => {
-                setRace(r.id);
+                setClassId(r.id);
                 setSetId(null);
               }}
             >
@@ -721,7 +735,7 @@ function Rebirth({ snap, game }: { snap: ReturnType<typeof getSnap>; game: Turbz
             </button>
           ))}
         </div>
-        <button className="px-btn px-btn-kyo mt-4" onClick={() => game?.rebirth(name, race, setId)}>
+        <button className="px-btn px-btn-kyo mt-4" onClick={() => game?.rebirth(name, race, setId, classId)}>
           Wake at a new tavern
         </button>
       </div>
@@ -759,7 +773,7 @@ function Stick({ on }: { on: (x: number, y: number) => void }) {
 function Panel({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   return (
     <div className="panel-drawer">
-      <div className="px-panel panel-scroll h-full p-4">
+      <div className="px-panel panel-scroll h-full p-4" role="region" aria-label={title}>
         <div className="mb-3 flex items-center justify-between gap-2">
           <h2 className="font-display text-xs text-kyo">{title}</h2>
           <button className="px-btn" onClick={onClose}>
@@ -773,8 +787,19 @@ function Panel({ title, onClose, children }: { title: string; onClose: () => voi
 }
 
 function Bag({ snap, game }: { snap: ReturnType<typeof getSnap>; game: TurbzGame | null }) {
+  const [search, setSearch] = useState("");
+  const [category, setCategory] = useState("all");
+  const term = search.trim().toLowerCase();
+  const items = snap.bag.filter(item => item.name.toLowerCase().includes(term));
+  const gear = snap.gear.filter(piece => `${piece.name} ${piece.slot} ${piece.quality}`.toLowerCase().includes(term)).slice().sort((a, b) => Number(snap.equipped.includes(b.uid)) - Number(snap.equipped.includes(a.uid)) || a.slot.localeCompare(b.slot) || a.name.localeCompare(b.name));
+  const count = (id: string) => snap.bag.find(item => item.id === id)?.count ?? 0;
   return (
     <div className="grid gap-4">
+      <div className="inventory-tools">
+        <input className="px-input" aria-label="Search inventory" placeholder="Search items, gear or slot" value={search} onChange={e => setSearch(e.target.value)} />
+        <select className="px-input" aria-label="Inventory category" value={category} onChange={e => setCategory(e.target.value)}><option value="all">Everything</option><option value="items">Items</option><option value="gear">Gear</option></select>
+        {search && <button className="px-btn" onClick={() => setSearch("")}>Clear search</button>}
+      </div>
       <div>
         <p className="font-display text-xs">Worn · {snap.setLabel}</p>
         <p className="text-dim">{snap.setBonus}</p>
@@ -784,27 +809,32 @@ function Bag({ snap, game }: { snap: ReturnType<typeof getSnap>; game: TurbzGame
               {row.name} {row.power}
             </li>
           ))}
-          {snap.totals.length === 0 && <li className="text-dim">No enchants yet.</li>}
+          {snap.totals.length === 0 && <li className="text-dim">Equipment provides fixed damage and armor.</li>}
         </ul>
-        <div className="mt-3 grid gap-1">
-          {snap.bag.map((item) => (
-            <button key={item.id} className="px-btn" onClick={() => game?.useBag(item.id)}>
+        {category !== "gear" && <div className="mt-3 grid gap-1">
+          <p className="text-kyo">Items · {items.length} stacks</p>
+          {!items.length && <p className="text-dim">{term ? "No matching items." : "Your bag is empty."}</p>}
+          {items.map((item) => (
+            <button key={item.id} className="px-btn text-left" disabled={!!item.useProblem} title={item.useProblem ?? item.about} onClick={() => game?.useBag(item.id)}>
               {item.name} x{item.count}
               <span className="mt-1 block text-dim">{item.about}</span>
+              {item.useProblem && <span className="block text-dim">{item.useProblem}</span>}
             </button>
           ))}
-        </div>
+        </div>}
         <div className="mt-3 grid gap-2 sm:grid-cols-2">
-          <button className="px-btn" onClick={() => game?.craftGear()}>
-            Craft · 10 leather + 10 mushroom
+          <button className="px-btn" disabled={count("leather") < 10 || count("mushroom") < 10} onClick={() => game?.craftGear()}>
+            Craft · Leather {count("leather")}/10 · Mushroom {count("mushroom")}/10
           </button>
           <button className="px-btn" onClick={() => game?.sellMats()}>
-            Sell hides and meat
+            {snap.rules === "hardcore" ? "Sell hides & ore · Keep survival supplies" : "Sell gathered materials"}
           </button>
         </div>
       </div>
-      <div className="grid gap-1">
-        {snap.gear.map((piece) => (
+      {category !== "items" && <div className="grid gap-1">
+        <p className="text-kyo">Gear · Worn first</p>
+        {!gear.length && <p className="text-dim">No matching gear.</p>}
+        {gear.map((piece) => (
           <button
             key={piece.uid}
             className={`px-btn text-left ${snap.selected === piece.uid ? "border-kyo" : ""}`}
@@ -812,7 +842,7 @@ function Bag({ snap, game }: { snap: ReturnType<typeof getSnap>; game: TurbzGame
           >
             {piece.name}
             <span className="mt-1 block text-dim">
-              {piece.slot} · {piece.quality}
+              {piece.slot} · {piece.quality} · {equipmentStats(piece).damage ? `Damage ${equipmentStats(piece).damage}` : `Armor ${equipmentStats(piece).armor}`}
               {snap.equipped.includes(piece.uid) ? " · worn" : ""}
             </span>
           </button>
@@ -822,12 +852,10 @@ function Bag({ snap, game }: { snap: ReturnType<typeof getSnap>; game: TurbzGame
             <button className="px-btn px-btn-kyo" onClick={() => game?.equip(snap.selected!)}>
               Wear
             </button>
-            <button className="px-btn" onClick={() => game?.sell(snap.selected!)}>
-              Sell
+            <button className="px-btn" disabled={snap.equipped.includes(snap.selected)} onClick={() => game?.sell(snap.selected!)}>
+              {snap.equipped.includes(snap.selected) ? "Worn · Equip a replacement to sell" : "Sell"}
             </button>
-            <button className="px-btn" onClick={() => game?.disenchant()}>
-              Unravel
-            </button>
+
           </div>
         )}
         {snap.stash.length > 0 && (
@@ -839,7 +867,7 @@ function Bag({ snap, game }: { snap: ReturnType<typeof getSnap>; game: TurbzGame
             ))}
           </div>
         )}
-      </div>
+      </div>}
     </div>
   );
 }
@@ -847,6 +875,7 @@ function Bag({ snap, game }: { snap: ReturnType<typeof getSnap>; game: TurbzGame
 function Skills({ snap, game }: { snap: ReturnType<typeof getSnap>; game: TurbzGame | null }) {
   return (
     <div className="grid gap-3">
+      <p className="text-kyo">{snap.skillPoints} character skill points. Spend them in Attacks & Spells.</p>
       <p>
         Account {snap.accountLevel} · {snap.accountXp}/{snap.accountNeed} · {snap.perkPoints} perk points
       </p>
@@ -880,16 +909,38 @@ function Skills({ snap, game }: { snap: ReturnType<typeof getSnap>; game: TurbzG
   );
 }
 
-function Moves({ snap }: { snap: ReturnType<typeof getSnap> }) {
-  return (
-    <div className="grid gap-1">
-      {snap.known.map((move) => (
-        <p key={move.id}>
-          <span className={typeClass(move.type)}>{move.name}</span>
-        </p>
-      ))}
-    </div>
-  );
+function Moves({ snap, game }: { snap: ReturnType<typeof getSnap>; game: TurbzGame | null }) {
+  const [filter, setFilter] = useState("");
+  const [expanded, setExpanded] = useState<string | null>(null);
+  return <div className="grid gap-3"><p className="text-kyo">{snap.skillPoints} skill points · +3 each character level</p><p className="text-dim">Hover, focus, or tap a Verse to read its effect. Unlock or upgrade for 1 point, up to rank 5. Each upgrade adds 15% damage, healing or shield strength.</p><input className="px-input" aria-label="Search abilities" placeholder="Search attacks and spells" value={filter} onChange={e => setFilter(e.target.value)} />{snap.abilities.filter(m => m.name.toLowerCase().includes(filter.toLowerCase())).map(move => <div className="px-panel verse-card p-3" key={move.id}>
+    <button className={`verse-name ${typeClass(move.type)}`} aria-expanded={expanded === move.id} aria-describedby={`verse-${move.id}`} onClick={() => setExpanded(expanded === move.id ? null : move.id)}>{move.name} · {move.rank ? `Rank ${move.rank}/5` : "Locked"}</button>
+    <div id={`verse-${move.id}`} className={`verse-description ${expanded === move.id ? "verse-open" : ""}`}><p>{move.about}</p><p className="text-dim">Power {move.power} · Accuracy {move.accuracy}% · Critical {move.crit}% · Range {move.range} · Effect {move.effect}</p></div>
+    <button className="px-btn mt-2" disabled={snap.skillPoints < 1 || move.rank >= 5} onClick={() => game?.spendAbility(move.id)}>{move.rank >= 5 ? "Max rank" : move.rank ? "Upgrade · 1 point" : "Unlock · 1 point"}</button></div>)}</div>;
+}
+
+function Survival({ snap, game }: { snap: ReturnType<typeof getSnap>; game: TurbzGame | null }) {
+  if (!snap.survival) return null;
+  const bag = Object.fromEntries(snap.bag.map(item => [item.id, item.count]));
+  const count = (id: string) => bag[id] ?? 0;
+  const food = bestFood(bag, snap.survival.hunger);
+  return <div className="grid gap-3">
+    <p className="text-kyo">Frontier Survival</p>
+    <p>Logs {count('timber')} · Raw meat {count('meat')} · Fish {count('fish')} · Raw water {count('raw_water')}</p>
+    <div className="grid grid-cols-2 gap-2"><button className="px-btn" disabled={!food} onClick={() => game?.eatFood()}>{food ? `Eat ${snap.bag.find(item => item.id === food)?.name}` : 'No meal needed / stocked'}</button><button className="px-btn" disabled={!count('drinking_water') || snap.survival.thirst >= 100} onClick={() => game?.useBag('drinking_water')}>Drink purified water · {count('drinking_water')}</button></div>
+    {[['Hunger', snap.survival.hunger], ['Thirst', snap.survival.thirst], ['Sleep', snap.survival.rest]].map(([name, value]) => <label key={name}>{name} · {Math.ceil(Number(value))}/100<progress className="survival-meter" max={100} value={value} /></label>)}
+    <p className="text-dim">Full reserves last 30 minutes of food, 20 of water, and 40 of sleep during active play. Empty reserves damage you; low sleep slows movement. Pause and hidden tabs stop the clock.</p>
+    <p>Injuries persist until a healing spell is used. Meals, sleep, potions, level-ups and hearths do not heal.</p>
+    <button className="px-btn" disabled={!snap.nearTree} onClick={() => game?.survivalAction('chop')}>Chop nearby tree → Logs</button>
+    <button className="px-btn" disabled={!snap.nearWater} onClick={() => game?.survivalAction('water')}>Harvest water · Stand by a water tile</button>
+    <button className="px-btn" disabled={snap.nearCamp || count('timber') < 3} onClick={() => game?.survivalAction('fire')}>Build campfire · 3 logs</button>
+    <p className="text-kyo">{snap.nearCamp ? 'Campfire within reach' : 'Stand beside a campfire to cook, purify, or sleep'}</p>
+    <button className="px-btn" disabled={!snap.nearCamp || count('meat') < 1 || count('timber') < 1} onClick={() => game?.survivalAction('cook')}>Cook · 1 raw meat + 1 log</button>
+    <button className="px-btn" disabled={!snap.nearCamp || count('fish') < 1 || count('timber') < 1} onClick={() => game?.survivalAction('fish')}>Cook fish · 1 raw fish + 1 log</button>
+    <button className="px-btn" disabled={!snap.nearCamp || count('raw_water') < 1 || count('timber') < 1} onClick={() => game?.survivalAction('purify')}>Purify · 1 raw water + 1 log</button>
+    <button className="px-btn" disabled={!snap.nearCamp} onClick={() => game?.survivalAction('sleep')}>{snap.sleeping ? 'Wake up' : 'Sleep · About 13 seconds for a full rest'}</button>
+    <p className="text-dim">Use meals and drinking water from Bag. Holt sells rations and cooked meat. Hunt animals for raw meat. Look for LOGS markers, including the grove beside the hearth.</p>
+    <button className="px-btn" onClick={() => game?.toggle('bag')}>Open Bag · Eat / Drink</button>
+  </div>;
 }
 
 function Ghost({ snap, game }: { snap: ReturnType<typeof getSnap>; game: TurbzGame | null }) {
@@ -912,6 +963,6 @@ function Mini({ snap, game }: { snap: ReturnType<typeof getSnap>; game: TurbzGam
     const canvas = ref.current;
     if (!canvas || !game) return;
     game.drawMap(canvas);
-  }, [game, snap.mapX, snap.mapY, snap.map]);
-  return <canvas ref={ref} className="map-canvas" aria-label="World map" />;
+  }, [game, snap.mapX, snap.mapY, snap.map, JSON.stringify(snap.dungeonPortals), JSON.stringify(snap.survival?.campfires)]);
+  return <div className="grid gap-3"><p className="text-kyo">Next dungeon in {Math.floor(snap.dungeonCountdown / 60)}:{String(snap.dungeonCountdown % 60).padStart(2, "0")} of active play.</p><canvas ref={ref} className="map-canvas" aria-label="World map" />{snap.dungeonPortals.filter(p => !p.cleared).map(p => <button className="px-btn" key={p.id} disabled={snap.map !== "world"} onClick={() => game?.trackRift(p.id)}>Track / enter Dungeon {p.id.slice(5)}</button>)}</div>;
 }
