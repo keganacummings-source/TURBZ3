@@ -1,6 +1,6 @@
 /**
- * V2 witch paperdoll — same rules as engine/character.lua:
- * 32px frames, integer scale, shared origin, body → hair → outfit → armor.
+ * V2 witch paperdoll — mirrors engine/character.lua:
+ * body → hair → optional gown → armor (one matching set).
  */
 import type { ActorDraw } from "./sprites";
 
@@ -49,7 +49,6 @@ function drawScale(scale: number): number {
   return dest / FRAME;
 }
 
-/** direction: 0 down, 1 left, 2 right, 3 up */
 function dirFromFacing(facing: number): number {
   return facing < 0 ? 1 : 2;
 }
@@ -60,7 +59,7 @@ function walkFrame(walk: number): number {
 }
 
 function outfitOrigin(outfit: number): [number, number] {
-  const s = outfit % OUTFIT_COUNT;
+  const s = ((outfit % OUTFIT_COUNT) + OUTFIT_COUNT) % OUTFIT_COUNT;
   const cell = s * 4;
   const col = cell % 20;
   const row = 2 + Math.floor(cell / 20);
@@ -74,6 +73,7 @@ function armorOrigin(setNumber: number, slotIndex: number): [number, number] {
   return [col * BLOCK, row * BLOCK];
 }
 
+/** BACK HEAD CHEST LEGS FEET inside a set block */
 const SLOT_INDEX: Record<string, number> = {
   back: 0,
   accessory: 0,
@@ -116,20 +116,23 @@ export function drawV2Character(ctx: CanvasRenderingContext2D, a: ActorDraw): bo
   const frame = walkFrame(a.walk ?? 0);
   const seed = hashSeed(a);
 
-  const skin = (a.skin ?? seed) % SKIN_COUNT;
-  const hair = (a.hair ?? seed * 3) % HAIR_COUNT;
-  const outfit = (a.pieces?.[0]?.style ?? seed * 7) % OUTFIT_COUNT;
+  const skin = ((a.skin ?? seed) % SKIN_COUNT + SKIN_COUNT) % SKIN_COUNT;
+  const hair = ((a.hair ?? seed * 3) % HAIR_COUNT + HAIR_COUNT) % HAIR_COUNT;
+  const outfit = ((seed * 7) % OUTFIT_COUNT + OUTFIT_COUNT) % OUTFIT_COUNT;
 
-  const pieces: { slot: string; set: number; quality: number }[] = [];
-  for (const p of a.pieces ?? []) {
-    if (["head", "chest", "legs", "feet", "back", "accessory"].includes(p.slot)) {
-      pieces.push({
-        slot: p.slot,
-        set: (p.style % 20) + 1,
-        quality: p.quality ?? 0,
-      });
-    }
-  }
+  const armorPieces = (a.pieces ?? []).filter((p) =>
+    ["head", "chest", "legs", "feet", "back"].includes(p.slot),
+  );
+
+  const chest = armorPieces.find((p) => p.slot === "chest");
+  const helm = armorPieces.some((p) => p.slot === "head");
+
+  // Always one matching set (from chest, else first piece)
+  const setNum = chest
+    ? (chest.style % 20) + 1
+    : armorPieces[0]
+      ? (armorPieces[0].style % 20) + 1
+      : 1;
 
   const px = Math.floor(-(FRAME / 2) * scale);
   const py = Math.floor(-(FRAME - 0.5) * scale);
@@ -142,26 +145,29 @@ export function drawV2Character(ctx: CanvasRenderingContext2D, a: ActorDraw): bo
   ctx.translate(a.x, a.y + bob);
   ctx.imageSmoothingEnabled = false;
 
-  ctx.fillStyle = "rgba(0,0,0,0.3)";
+  ctx.fillStyle = "rgba(0,0,0,0.28)";
   ctx.beginPath();
-  ctx.ellipse(0, 2, 9 * scale * 0.45, 2.8 * scale * 0.3, 0, 0, Math.PI * 2);
+  ctx.ellipse(0, 2, 9 * scale * 0.42, 2.6 * scale * 0.28, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  blitFrame(ctx, witchImg, (skin % SKIN_COUNT) * BLOCK, 0, direction, frame, px, py, scale);
+  blitFrame(ctx, witchImg, skin * BLOCK, 0, direction, frame, px, py, scale);
 
-  const helm = pieces.some((p) => p.slot === "head");
   if (!helm) {
-    blitFrame(ctx, witchImg, (hair % HAIR_COUNT) * BLOCK, BLOCK, direction, frame, px, py, scale);
+    blitFrame(ctx, witchImg, hair * BLOCK, BLOCK, direction, frame, px, py, scale);
   }
 
-  const [ox, oy] = outfitOrigin(outfit);
-  blitFrame(ctx, witchImg, ox, oy, direction, frame, px, py, scale);
+  // Soft gown only when no chest plate
+  if (!chest) {
+    const [ox, oy] = outfitOrigin(outfit);
+    blitFrame(ctx, witchImg, ox, oy, direction, frame, px, py, scale);
+  }
 
-  const rank: Record<string, number> = { feet: 1, legs: 2, chest: 3, accessory: 4, back: 4, head: 5 };
-  pieces.sort((a, b) => (rank[a.slot] ?? 9) - (rank[b.slot] ?? 9));
-  for (const p of pieces) {
-    const idx = SLOT_INDEX[p.slot] ?? 2;
-    const [ax, ay] = armorOrigin(p.set, idx);
+  const rank: Record<string, number> = { back: 0, feet: 1, legs: 2, chest: 3, head: 4 };
+  const ordered = [...armorPieces].sort((x, y) => (rank[x.slot] ?? 9) - (rank[y.slot] ?? 9));
+  for (const p of ordered) {
+    const idx = SLOT_INDEX[p.slot];
+    if (idx === undefined) continue;
+    const [ax, ay] = armorOrigin(setNum, idx);
     blitFrame(ctx, armorImg, ax, ay, direction, frame, px, py, scale);
   }
 
