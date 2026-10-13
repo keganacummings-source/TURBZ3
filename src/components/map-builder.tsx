@@ -9,6 +9,9 @@ import {
 } from "@/game/map-format";
 import { loadTileCatalog, tileImage, type AtlasTile, type TileCatalog } from "@/game/tile-atlas";
 
+const CUSTOM_KEY = "turbz-custom-sprites-v1";
+type CustomSprite = { id: string; name: string; dataUrl: string; walkThrough?: boolean };
+
 const KEY = "turbz-designer-maps-v1";
 type Tool = "pan" | "paint" | "erase" | "wall" | "start" | "enemy" | "boss" | "remove";
 export function MapBuilder({ onBack }: { onBack: () => void }) {
@@ -21,6 +24,9 @@ export function MapBuilder({ onBack }: { onBack: () => void }) {
   const [search, setSearch] = useState("");
   const [tile, setTile] = useState<AtlasTile | null>(null);
   const [tool, setTool] = useState<Tool>("paint");
+  const [walkThroughMode, setWalkThroughMode] = useState(false);
+  const [customSprites, setCustomSprites] = useState<CustomSprite[]>([]);
+  const [selectedCustom, setSelectedCustom] = useState<CustomSprite | null>(null);
   const [species, setSpecies] = useState("gaikotsu");
   const [zoom, setZoom] = useState(24);
   const [status, setStatus] = useState("Pick a tile and paint. Scroll to explore your map.");
@@ -57,6 +63,10 @@ export function MapBuilder({ onBack }: { onBack: () => void }) {
     } catch {
       setStatus("Saved map library could not be read. Import a backup to recover it.");
     }
+    try {
+      const customs = JSON.parse(localStorage.getItem(CUSTOM_KEY) ?? "[]");
+      setCustomSprites(Array.isArray(customs) ? customs : []);
+    } catch {}
     const el = viewport.current;
     if (!el) return;
     const observer = new ResizeObserver(() =>
@@ -92,7 +102,12 @@ export function MapBuilder({ onBack }: { onBack: () => void }) {
           ctx.fillStyle = FLOOR_COLOR[t.floor] ?? FLOOR_COLOR[0]!;
           ctx.fillRect(dx, dy, zoom, zoom);
           if (t.sprite) {
-            const img = tileImage(t.sprite);
+            const img = tileImage(t.sprite.startsWith("custom:") ? (customSprites.find(s => s.id === t.sprite.slice(7))?.dataUrl || "") : t.sprite);
+            if (img.complete && img.naturalWidth) ctx.drawImage(img, dx, dy, zoom, zoom);
+            else if (!img.complete) pending = true;
+          }
+          if (t.overlay) {
+            const img = tileImage(t.overlay.startsWith("custom:") ? (customSprites.find(s => s.id === t.overlay.slice(7))?.dataUrl || "") : t.overlay);
             if (img.complete && img.naturalWidth) ctx.drawImage(img, dx, dy, zoom, zoom);
             else if (!img.complete) pending = true;
           }
@@ -163,8 +178,17 @@ export function MapBuilder({ onBack }: { onBack: () => void }) {
     else if (tool === "wall")
       next.tiles[idx] = { ...m.tiles[idx]!, block: m.tiles[idx]!.block ? 0 : 1 };
     else if (tool === "erase") next.tiles[idx] = { floor: 8, biome: 3, block: 0, decor: 0 };
-    else if (tile)
-      next.tiles[idx] = { ...m.tiles[idx]!, sprite: tile.path, block: tile.solid ? 1 : 0 };
+    else if (selectedCustom || tile) {
+      const src = selectedCustom ? `custom:${selectedCustom.id}` : tile!.path;
+      const isWT = walkThroughMode || selectedCustom?.walkThrough || false;
+      const base = m.tiles[idx]!;
+      if (isWT && base.sprite) {
+        // Stack as overlay
+        next.tiles[idx] = { ...base, overlay: src, walkThrough: true };
+      } else {
+        next.tiles[idx] = { ...base, sprite: src, overlay: isWT ? base.overlay : undefined, block: isWT ? base.block : (tile?.solid ? 1 : 0), walkThrough: isWT };
+      }
+    }
     setDocument(next);
   }
   function accept(m: MapFile) {
@@ -414,9 +438,40 @@ export function MapBuilder({ onBack }: { onBack: () => void }) {
             ))}
           </div>
           {catalog && !tiles.length && <p>No matching tiles.</p>}
+          <hr className="my-2" />
+          <p className="font-display text-xs text-kyo">Custom Sprites</p>
+          <input type="file" accept="image/png,image/gif,image/webp" onChange={async (e) => {
+            const f = e.target.files?.[0];
+            if (!f) return;
+            const dataUrl = await new Promise<string>((res) => { const r = new FileReader(); r.onload = () => res(r.result as string); r.readAsDataURL(f); });
+            const cs: CustomSprite = { id: crypto.randomUUID(), name: f.name.replace(/\.[^.]+$/, ""), dataUrl, walkThrough: walkThroughMode };
+            const next = [...customSprites, cs];
+            setCustomSprites(next);
+            localStorage.setItem(CUSTOM_KEY, JSON.stringify(next));
+            setSelectedCustom(cs);
+            setStatus(`Saved custom sprite: ${cs.name}`);
+            e.target.value = "";
+          }} />
+          <div className="tile-palette mt-1">
+            {customSprites.map(cs => (
+              <button key={cs.id} title={cs.name} className={`tile-choice ${selectedCustom?.id === cs.id ? "selected" : ""}`} onClick={() => { setSelectedCustom(cs); setTile(null); setTool("paint"); }}>
+                <img src={cs.dataUrl} alt={cs.name} style={{width:32,height:32,imageRendering:"pixelated"}} />
+              </button>
+            ))}
+          </div>
+          {selectedCustom && <button className="px-btn mt-1" onClick={() => {
+            const next = customSprites.filter(s => s.id !== selectedCustom.id);
+            setCustomSprites(next);
+            localStorage.setItem(CUSTOM_KEY, JSON.stringify(next));
+            setSelectedCustom(null);
+          }}>Delete selected custom</button>}
         </aside>
         <div className="designer-map">
           <div className="designer-toolbar">
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={walkThroughMode} onChange={e => setWalkThroughMode(e.target.checked)} />
+              Stack as WalkThrough (doors / transparent)
+            </label>
             <label>
               Tool
               <select

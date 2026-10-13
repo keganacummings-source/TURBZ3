@@ -909,13 +909,68 @@ function Skills({ snap, game }: { snap: ReturnType<typeof getSnap>; game: TurbzG
   );
 }
 
+const EFFECT_DESC: Record<string, string> = {
+  none: "No additional effect.",
+  burn: "Burns the target over time, dealing fire damage each turn.",
+  soak: "Soaks the target, reducing accuracy or speed.",
+  root: "Roots the target in place, preventing movement.",
+  sleep: "Puts the target to sleep, skipping turns.",
+  gloom: "Applies gloom, reducing power or accuracy.",
+  spark: "Sparks chain to nearby targets or stuns briefly.",
+  expose: "Exposes the target, increasing damage taken.",
+  leech: "Leeches life from the target back to the caster.",
+  shell: "Creates a protective shell that absorbs damage.",
+  silence: "Silences the target, preventing spell use.",
+  mend: "Mends the caster's wounds, restoring HP."
+};
+
+const MOVEMENT_TYPES: Record<string, string> = {
+  blink: "Blink (short teleport)",
+  lunge: "Lunge (dash in and back)",
+  roll: "Roll (distance-based evade)"
+};
+
 function Moves({ snap, game }: { snap: ReturnType<typeof getSnap>; game: TurbzGame | null }) {
   const [filter, setFilter] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
-  return <div className="grid gap-3"><p className="text-kyo">{snap.skillPoints} skill points · +3 each character level</p><p className="text-dim">Hover, focus, or tap a Verse to read its effect. Unlock or upgrade for 1 point, up to rank 5. Each upgrade adds 15% damage, healing or shield strength.</p><input className="px-input" aria-label="Search abilities" placeholder="Search attacks and spells" value={filter} onChange={e => setFilter(e.target.value)} />{snap.abilities.filter(m => m.name.toLowerCase().includes(filter.toLowerCase())).map(move => <div className="px-panel verse-card p-3" key={move.id}>
-    <button className={`verse-name ${typeClass(move.type)}`} aria-expanded={expanded === move.id} aria-describedby={`verse-${move.id}`} onClick={() => setExpanded(expanded === move.id ? null : move.id)}>{move.name} · {move.rank ? `Rank ${move.rank}/5` : "Locked"}</button>
-    <div id={`verse-${move.id}`} className={`verse-description ${expanded === move.id ? "verse-open" : ""}`}><p>{move.about}</p><p className="text-dim">Power {move.power} · Accuracy {move.accuracy}% · Critical {move.crit}% · Range {move.range} · Effect {move.effect}</p></div>
-    <button className="px-btn mt-2" disabled={snap.skillPoints < 1 || move.rank >= 5} onClick={() => game?.spendAbility(move.id)}>{move.rank >= 5 ? "Max rank" : move.rank ? "Upgrade · 1 point" : "Unlock · 1 point"}</button></div>)}</div>;
+  const [cat, setCat] = useState("all");
+  const cats = ["all", "damage", "movement", "ward", "heal", "status"];
+  const filtered = snap.abilities.filter(m => {
+    if (!m.name.toLowerCase().includes(filter.toLowerCase())) return false;
+    if (cat === "all") return true;
+    const tac = m.tactic || (m.effect === "mend" ? "heal" : m.effect === "shell" ? "ward" : "strike");
+    if (cat === "movement") return ["blink","lunge","roll"].includes(tac);
+    if (cat === "ward") return tac === "ward" || m.effect === "shell";
+    if (cat === "heal") return tac === "heal" || m.effect === "mend";
+    if (cat === "status") return m.effect !== "none" && !["mend","shell"].includes(m.effect);
+    return tac === "strike" || !m.tactic;
+  });
+  return <div className="grid gap-3">
+    <p className="text-kyo">{snap.skillPoints} skill points · +3 each character level</p>
+    <p className="text-dim">Categories filter Verses. Hover an effect to see what it does. Movement moves are flagged with their type.</p>
+    <div className="flex flex-wrap gap-1">
+      {cats.map(c => <button key={c} className={`px-btn ${cat===c?"px-btn-kyo":""}`} onClick={() => setCat(c)}>{c[0].toUpperCase()+c.slice(1)}</button>)}
+    </div>
+    <input className="px-input" aria-label="Search abilities" placeholder="Search attacks and spells" value={filter} onChange={e => setFilter(e.target.value)} />
+    {filtered.map(move => {
+      const tac = move.tactic || "";
+      const moveFlag = MOVEMENT_TYPES[tac] || "";
+      return <div className="px-panel verse-card p-3" key={move.id}>
+        <button className={`verse-name ${typeClass(move.type)}`} aria-expanded={expanded === move.id} onClick={() => setExpanded(expanded === move.id ? null : move.id)}>
+          {move.name} · {move.rank ? `Rank ${move.rank}/5` : "Locked"} {moveFlag && <span className="text-kyo"> · {moveFlag}</span>}
+        </button>
+        <div className={`verse-description ${expanded === move.id ? "verse-open" : ""}`}>
+          <p>{move.about}</p>
+          <p className="text-dim">Power {move.power} · Accuracy {move.accuracy}% · Critical {move.crit}% · Range {move.range} · 
+            <span title={EFFECT_DESC[move.effect] || "Unknown effect"} className="underline cursor-help">Effect {move.effect}</span>
+          </p>
+        </div>
+        <button className="px-btn mt-2" disabled={snap.skillPoints < 1 || move.rank >= 5} onClick={() => game?.spendAbility(move.id)}>
+          {move.rank >= 5 ? "Max rank" : move.rank ? "Upgrade · 1 point" : "Unlock · 1 point"}
+        </button>
+      </div>;
+    })}
+  </div>;
 }
 
 function Survival({ snap, game }: { snap: ReturnType<typeof getSnap>; game: TurbzGame | null }) {
@@ -944,15 +999,39 @@ function Survival({ snap, game }: { snap: ReturnType<typeof getSnap>; game: Turb
 }
 
 function Ghost({ snap, game }: { snap: ReturnType<typeof getSnap>; game: TurbzGame | null }) {
+  const [selected, setSelected] = useState<number | null>(null);
+  const [teachId, setTeachId] = useState("");
+  // Assume snap.spirits is enhanced; for now use box and known
   return (
     <div className="grid gap-2">
       <p>{snap.companion}</p>
-      <p className="text-dim">Kills can recruit a spirit. A full party of three keeps the stronger ones. Dead spirits sit out the next turns.</p>
+      <p className="text-dim">Kills can recruit a spirit. Click a spirit for details, stats, known spells, and teaching.</p>
       {snap.box.map((line, i) => (
-        <button key={`${line}-${i}`} className="px-btn" onClick={() => game?.summonBox(i)}>
-          Call {line}
-        </button>
+        <div key={`${line}-${i}`} className="px-panel p-2">
+          <button className="px-btn w-full text-left" onClick={() => setSelected(selected === i ? null : i)}>
+            {line} {selected === i ? "▼" : "▶"}
+          </button>
+          {selected === i && (
+            <div className="mt-2 grid gap-1 text-sm">
+              <p>Known spells: {snap.known.slice(0, 4).map(k => k.name).join(", ") || "None"}</p>
+              <p className="text-dim">Level and rarity from name. Full stats available in combat.</p>
+              <div className="flex gap-1">
+                <select value={teachId} onChange={e => setTeachId(e.target.value)} className="px-input">
+                  <option value="">Teach a known Verse...</option>
+                  {snap.known.map(k => <option key={k.id} value={k.id}>{k.name}</option>)}
+                </select>
+                <button className="px-btn" disabled={!teachId} onClick={() => {
+                  // game?.teachSpirit(i, teachId); // stub
+                  alert(`Teaching ${teachId} to spirit (requires engine support)`);
+                  setTeachId("");
+                }}>Teach</button>
+              </div>
+              <button className="px-btn" onClick={() => game?.summonBox(i)}>Summon / Call</button>
+            </div>
+          )}
+        </div>
       ))}
+      {snap.box.length === 0 && <p className="text-dim">No spirits recruited yet.</p>}
     </div>
   );
 }
