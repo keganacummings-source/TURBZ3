@@ -6,7 +6,6 @@
  */
 import { POIS, TILE, scaleTile, type TypeId } from "./content";
 import { loadNamedMap } from "./map-loader";
-import { fetchMapFile } from "./map-format";
 
 const BOSS_MAP_ID = "worldbossarea1";
 
@@ -121,14 +120,13 @@ async function enterBossDen(game: any, bossId: string): Promise<void> {
   game.activeBossId = bossId;
   game.say?.(`A flesh-rift tears open. ${poi.name} waits in the den.`);
 
-  const file = await fetchMapFile(BOSS_MAP_ID);
   const world = await loadNamedMap(BOSS_MAP_ID, save.seed ?? 42);
   game.world = world;
   if (game.world) game.world.cache = null;
   save.map = BOSS_MAP_ID;
 
-  const spawnTx = file?.spawn?.tx ?? Math.floor((world.w || 24) / 2);
-  const spawnTy = file?.spawn?.ty ?? Math.floor((world.h || 18) / 2);
+  const spawnTx = 4;
+  const spawnTy = 13;
   save.x = spawnTx * TILE + 16;
   save.y = spawnTy * TILE + 16;
   if (game.cam) {
