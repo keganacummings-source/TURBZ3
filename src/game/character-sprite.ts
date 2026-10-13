@@ -1,11 +1,11 @@
 /**
- * Animated draw of the female Human main character using CharacterPack
- * static 32×32 sprites + procedural motion (walk / run / jump / attack).
+ * Female Human player doll using CharacterPack (DCSS-style 32×32).
  *
- * Scale notes:
- * - Source art is 32×32 (DCSS-style). Armor overlays share the same frame origin.
- * - BASE_SCALE controls on-screen size. Layer offsets are in *source pixels* and
- *   are multiplied by the same pixel scale so sets stay registered when upscaled.
+ * Composition rules (matches how these tiles were drawn):
+ * - Chest armor tiles are FULL-BODY frames — they replace the nude base.
+ * - Head / feet / hands / back composite on top when present.
+ * - Weapon & shield use grip offsets on the sides.
+ * - All layers share the same 32×32 origin; scale is uniform (no squish).
  */
 
 import type { ActorDraw } from "./sprites";
@@ -29,10 +29,9 @@ export type CharAnim = {
   time: number;
 };
 
-/** On-screen scale multiplier for the 32×32 pack (was ~2.15 — far too small). */
-const BASE_SCALE = 4.6;
-/** Source-pixel → screen-pixel factor applied to both size and offsets. */
-const PX = 0.55;
+/** On-screen size of the 32×32 doll (source px → screen px). */
+const UNIT = 3.2; // ~102px tall character
+const BASE_SCALE = 1;
 
 export function animFromActor(a: ActorDraw, moving: boolean, running: boolean, airborne: boolean): CharAnim {
   const t = a.time ?? 0;
@@ -78,11 +77,10 @@ function pickItem(slot: string, seed: number): PackItem | null {
   return pool[Math.abs(seed) % pool.length]!;
 }
 
-function resolveVisualGear(
-  a: ActorDraw,
-  optsGear?: Gear[],
-): Array<{ slot: string; packPath: string; packKind: string; packSlot: string }> {
-  const out: Array<{ slot: string; packPath: string; packKind: string; packSlot: string }> = [];
+type Vis = { slot: string; packPath: string; packKind: string; packSlot: string };
+
+function resolveVisualGear(a: ActorDraw, optsGear?: Gear[]): Vis[] {
+  const out: Vis[] = [];
   const seen = new Set<string>();
 
   const push = (slot: string, path: string, kind: string, packSlot: string) => {
@@ -106,10 +104,12 @@ function resolveVisualGear(
 
   for (const p of a.pieces ?? []) {
     if ((p as { packPath?: string }).packPath) {
-      const path = (p as { packPath?: string }).packPath!;
-      const kind = (p as { packKind?: string }).packKind ?? p.slot;
-      const ps = (p as { packSlot?: string }).packSlot ?? p.slot;
-      push(p.slot, path, kind, ps);
+      push(
+        p.slot,
+        (p as { packPath: string }).packPath,
+        (p as { packKind?: string }).packKind ?? p.slot,
+        (p as { packSlot?: string }).packSlot ?? p.slot,
+      );
     }
   }
 
@@ -118,21 +118,9 @@ function resolveVisualGear(
     const it = pickItem("chest", seed + 1);
     if (it) push("chest", it.path, it.kind, "chest");
   }
-  if (!out.some((x) => x.packSlot === "head" || x.slot === "head")) {
-    const it = pickItem("head", seed + 2);
-    if (it) push("head", it.path, it.kind, "head");
-  }
-  if (!out.some((x) => x.packSlot === "feet" || x.slot === "feet")) {
-    const it = pickItem("feet", seed + 3);
-    if (it) push("feet", it.path, it.kind, "feet");
-  }
   if (!out.some((x) => x.packSlot === "weapon" || x.slot === "weapon")) {
     const it = pickItem("weapon", seed + 4);
     if (it) push("weapon", it.path, it.kind, "weapon");
-  }
-  if (!out.some((x) => x.packSlot === "shield") && seed % 5 === 0) {
-    const it = pickItem("shield", seed + 5);
-    if (it) push("relic", it.path, it.kind, "shield");
   }
 
   return out;
@@ -154,10 +142,10 @@ export function drawCharacterSprite(
     return false;
   }
 
-  const body = charImage(pack.base.body);
-  if (!body.complete && body.naturalWidth <= 0) {
+  const bodyImg = charImage(pack.base.body);
+  if (!bodyImg.complete && bodyImg.naturalWidth <= 0) {
     ensureCharacterPack();
-    if (!packReady() && body.naturalWidth <= 0) return false;
+    if (!packReady() && bodyImg.naturalWidth <= 0) return false;
   }
 
   const moving = opts?.moving ?? a.walk > 0.08;
@@ -172,39 +160,36 @@ export function drawCharacterSprite(
   let stretchY = 1;
   let stretchX = 1;
   if (anim.state === "walk") {
-    bob = Math.sin(t * 10) * 2.2;
-    lean = Math.sin(t * 10) * 0.035;
+    bob = Math.sin(t * 10) * 2.4;
+    lean = Math.sin(t * 10) * 0.03;
   } else if (anim.state === "run") {
-    bob = Math.sin(t * 16) * 3.2;
-    lean = 0.1 + Math.sin(t * 16) * 0.05;
+    bob = Math.sin(t * 16) * 3.4;
+    lean = 0.09 + Math.sin(t * 16) * 0.04;
   } else if (anim.state === "jump") {
     bob = -anim.jumpY - 8;
     stretchY = 0.9;
     stretchX = 1.08;
   } else if (anim.state === "attack") {
-    bob = Math.sin(anim.attackT * Math.PI) * -1.6;
+    bob = Math.sin(anim.attackT * Math.PI) * -1.8;
   } else {
-    bob = Math.sin(t * 2.2) * 0.7;
+    bob = Math.sin(t * 2.2) * 0.8;
   }
 
-  const sc = (a.scale ?? 1) * BASE_SCALE;
-  const unit = sc * PX; // 1 source pixel → screen pixels
+  const unit = UNIT * (a.scale ?? 1) * BASE_SCALE;
 
-  // Foot-anchored: a.x/a.y is ground contact under the feet
   ctx.save();
   ctx.translate(a.x, a.y + bob);
   ctx.scale(face * stretchX, stretchY);
   ctx.rotate(lean * face);
 
-  ctx.fillStyle = "rgba(0,0,0,0.32)";
+  ctx.fillStyle = "rgba(0,0,0,0.34)";
   ctx.beginPath();
-  ctx.ellipse(0, 2, 11 * unit * 0.7, 3.4 * unit * 0.35, 0, 0, Math.PI * 2);
+  ctx.ellipse(0, 2, 14 * unit * 0.45, 4 * unit * 0.28, 0, 0, Math.PI * 2);
   ctx.fill();
 
   ctx.imageSmoothingEnabled = false;
 
   const visuals = resolveVisualGear(a, opts?.gear);
-
   const shield = visuals.find((g) => g.packSlot === "shield");
   const weapon = visuals.find((g) => g.packSlot === "weapon" || g.slot === "weapon");
   const chest = visuals.find((g) => g.packSlot === "chest" || g.slot === "chest");
@@ -213,28 +198,33 @@ export function drawCharacterSprite(
   const hands = visuals.find((g) => g.packSlot === "hands");
   const back = visuals.find((g) => g.packSlot === "back");
 
-  // DCSS 32×32 frames share origin — draw all layers at the same anchor.
-  const ANCHOR_Y = -16;
+  const ax = 0;
+  const ay = -16;
 
-  if (back?.packPath) drawLayer(ctx, back.packPath, 0, ANCHOR_Y, unit, 0);
-  if (shield) drawHeld(ctx, shield.packPath, shield.packKind || "shield", anim, unit, -1);
+  if (back?.packPath) blit(ctx, back.packPath, ax, ay, unit);
+  if (shield) hold(ctx, shield.packPath, shield.packKind || "shield", anim, unit, -1);
 
-  drawLayer(ctx, pack.base.body, 0, ANCHOR_Y, unit, 0);
+  // BODY — chest armor replaces nude base (tiles are full-body)
+  if (chest?.packPath) {
+    blit(ctx, chest.packPath, ax, ay, unit);
+  } else {
+    blit(ctx, pack.base.body, ax, ay, unit);
+  }
 
-  if (feet?.packPath) drawLayer(ctx, feet.packPath, 0, ANCHOR_Y, unit, 0);
-  if (chest?.packPath) drawLayer(ctx, chest.packPath, 0, ANCHOR_Y, unit, 0);
-  if (hands?.packPath) drawLayer(ctx, hands.packPath, 0, ANCHOR_Y, unit, 0);
-  if (head?.packPath) drawLayer(ctx, head.packPath, 0, ANCHOR_Y, unit, 0);
+  if (feet?.packPath) blit(ctx, feet.packPath, ax, ay, unit);
+  if (hands?.packPath) blit(ctx, hands.packPath, ax, ay, unit);
+  if (head?.packPath) blit(ctx, head.packPath, ax, ay, unit);
+  else {
+    const hairVis = pack.visuals.find((v) => v.kind === "hair");
+    if (hairVis && a.female) blit(ctx, hairVis.path, ax, ay, unit);
+  }
 
-  const hairVis = pack.visuals.find((v) => v.kind === "hair");
-  if (hairVis && a.female && !head) drawLayer(ctx, hairVis.path, 0, ANCHOR_Y, unit, 0);
-
-  if (weapon) drawHeld(ctx, weapon.packPath, weapon.packKind || "blade", anim, unit, 1);
+  if (weapon) hold(ctx, weapon.packPath, weapon.packKind || "blade", anim, unit, 1);
 
   if (a.hurt > 0) {
-    ctx.globalAlpha = a.hurt * 0.5;
+    ctx.globalAlpha = a.hurt * 0.45;
     ctx.fillStyle = "#fff";
-    ctx.fillRect(-10 * unit, -28 * unit, 20 * unit, 28 * unit);
+    ctx.fillRect(-12 * unit, -28 * unit, 24 * unit, 28 * unit);
     ctx.globalAlpha = 1;
   }
 
@@ -242,27 +232,21 @@ export function drawCharacterSprite(
   return true;
 }
 
-/** Draw a 32×32 pack layer. ox/oy are source-pixel offsets from feet anchor. */
-function drawLayer(
+function blit(
   ctx: CanvasRenderingContext2D,
   path: string,
   ox: number,
   oy: number,
   unit: number,
-  rot: number,
 ): void {
   const img = charImage(path);
   if (!img.complete || img.naturalWidth <= 0) return;
   const w = img.naturalWidth * unit;
   const h = img.naturalHeight * unit;
-  ctx.save();
-  ctx.translate(ox * unit, oy * unit);
-  ctx.rotate(rot);
-  ctx.drawImage(img, -w / 2, -h / 2, w, h);
-  ctx.restore();
+  ctx.drawImage(img, ox * unit - w / 2, oy * unit - h / 2, w, h);
 }
 
-function drawHeld(
+function hold(
   ctx: CanvasRenderingContext2D,
   path: string,
   kind: string,
@@ -273,26 +257,29 @@ function drawHeld(
   const img = charImage(path);
   if (!img.complete || img.naturalWidth <= 0) return;
   const grip = gripFor(kind);
-  let angle = grip.restAngle * side;
+
+  // Full-frame weapon/shield art composites at doll origin when not attacking
+  if (img.naturalWidth >= 32 && anim.state !== "attack") {
+    blit(ctx, path, 0, -16, unit);
+    return;
+  }
+
+  let angle = grip.restAngle * (side > 0 ? 1 : 0.6);
   if (anim.state === "attack" && side > 0) {
-    const swing = Math.sin(anim.attackT * Math.PI) * grip.swing;
-    angle = grip.restAngle + swing;
+    angle = grip.restAngle + Math.sin(anim.attackT * Math.PI) * grip.swing;
   } else if (anim.state === "walk" || anim.state === "run") {
     const speed = anim.state === "run" ? 16 : 10;
-    angle = grip.restAngle * side + Math.sin(anim.time * speed) * 0.1 * side;
-  } else if (anim.state === "jump") {
-    angle = grip.restAngle * side - 0.2 * side;
+    angle += Math.sin(anim.time * speed) * 0.08 * side;
   }
 
   const w = img.naturalWidth * unit * grip.scale;
   const h = img.naturalHeight * unit * grip.scale;
-
-  const hx = (side > 0 ? 10 : -9) + (grip.hx - 10) * 0.35 * side;
-  const hy = -12 + grip.hy * 0.25;
+  const hx = side > 0 ? 9 : -8;
+  const hy = -11;
 
   ctx.save();
   ctx.translate(hx * unit, hy * unit);
-  ctx.rotate(angle);
+  ctx.rotate(angle * side);
   ctx.drawImage(img, -w * 0.35, -h * 0.7, w, h);
   ctx.restore();
 }
