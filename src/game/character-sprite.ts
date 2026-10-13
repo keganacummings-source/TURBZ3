@@ -1,11 +1,12 @@
 /**
- * Female Human player doll using CharacterPack (DCSS-style 32×32).
+ * Player doll — V2-style composition adapted for CharacterPack (32×32 DCSS tiles).
  *
- * Composition rules (matches how these tiles were drawn):
- * - Chest armor tiles are FULL-BODY frames — they replace the nude base.
- * - Head / feet / hands / back composite on top when present.
- * - Weapon & shield are inventory tiles drawn in-hand at ~55% scale (never stamped full-frame over the body).
- * - All body layers share the same 32×32 origin; scale is uniform.
+ * From V2 (engine/character.lua + armor_v2 guide):
+ * - Source frames are 32px (V2 bakes 96→32). Scale snaps to whole pixels.
+ * - Every layer shares the same origin and scale (no per-slot drift).
+ * - Layer order: back → body/chest → feet → hands → hair → head → held.
+ * - Chest armor in this pack is a full-body frame and replaces the nude base.
+ * - Weapons/shields are inventory tiles drawn in-hand at reduced scale.
  */
 
 import type { ActorDraw } from "./sprites";
@@ -29,9 +30,20 @@ export type CharAnim = {
   time: number;
 };
 
-/** On-screen size of the 32×32 doll (source px → screen px). */
-const UNIT = 3.2; // ~102px tall character
-const BASE_SCALE = 1;
+/** Match V2: FRAME is the logical sprite size before scale. */
+const FRAME = 32;
+/**
+ * World draw scale relative to FRAME (V2 often uses ~2–3 on the 320 board).
+ * dest = max(FRAME, floor(FRAME * WORLD_SCALE)) → ~80px tall.
+ */
+const WORLD_SCALE = 2.5;
+
+/** V2 drawScale: snap to whole pixels so layers stay registered. */
+function drawScale(scale: number): number {
+  const s = scale || 1;
+  const dest = Math.max(FRAME, Math.floor(FRAME * s + 0.5));
+  return dest / FRAME;
+}
 
 export function animFromActor(a: ActorDraw, moving: boolean, running: boolean, airborne: boolean): CharAnim {
   const t = a.time ?? 0;
@@ -43,7 +55,7 @@ export function animFromActor(a: ActorDraw, moving: boolean, running: boolean, a
   return {
     state,
     attackT: Math.max(0, Math.min(1, a.attack)),
-    jumpY: airborne ? 10 : 0,
+    jumpY: airborne ? 8 : 0,
     time: t,
   };
 }
@@ -82,7 +94,6 @@ type Vis = { slot: string; packPath: string; packKind: string; packSlot: string 
 function resolveVisualGear(a: ActorDraw, optsGear?: Gear[]): Vis[] {
   const out: Vis[] = [];
   const seen = new Set<string>();
-
   const push = (slot: string, path: string, kind: string, packSlot: string) => {
     const key = packSlot || slot;
     if (!path || seen.has(key)) return;
@@ -90,16 +101,13 @@ function resolveVisualGear(a: ActorDraw, optsGear?: Gear[]): Vis[] {
     out.push({ slot, packPath: path, packKind: kind, packSlot: packSlot || slot });
   };
 
-  const list = [
+  for (const g of [
     ...(optsGear ?? []),
     ...((a as ActorDraw & { packGear?: Gear[] }).packGear ?? []),
     ...liveEquippedPackGear(),
-  ];
-  for (const g of list) {
+  ]) {
     const pg = asPackGear(g);
-    if (pg?.packPath) {
-      push(g.slot, pg.packPath, pg.packKind ?? "blade", pg.packSlot ?? g.slot);
-    }
+    if (pg?.packPath) push(g.slot, pg.packPath, pg.packKind ?? "blade", pg.packSlot ?? g.slot);
   }
 
   for (const p of a.pieces ?? []) {
@@ -122,26 +130,19 @@ function resolveVisualGear(a: ActorDraw, optsGear?: Gear[]): Vis[] {
     const it = pickItem("weapon", seed + 4);
     if (it) push("weapon", it.path, it.kind, "weapon");
   }
-
   return out;
 }
 
 export function drawCharacterSprite(
   ctx: CanvasRenderingContext2D,
   a: ActorDraw,
-  opts?: {
-    moving?: boolean;
-    running?: boolean;
-    airborne?: boolean;
-    gear?: Gear[];
-  },
+  opts?: { moving?: boolean; running?: boolean; airborne?: boolean; gear?: Gear[] },
 ): boolean {
   const pack = getCharacterPack();
   if (!pack) {
     ensureCharacterPack();
     return false;
   }
-
   const bodyImg = charImage(pack.base.body);
   if (!bodyImg.complete && bodyImg.naturalWidth <= 0) {
     ensureCharacterPack();
@@ -157,37 +158,34 @@ export function drawCharacterSprite(
 
   let bob = 0;
   let lean = 0;
-  let stretchY = 1;
-  let stretchX = 1;
   if (anim.state === "walk") {
-    bob = Math.sin(t * 10) * 2.4;
+    bob = Math.sin(t * 10) * 1.5;
     lean = Math.sin(t * 10) * 0.03;
   } else if (anim.state === "run") {
-    bob = Math.sin(t * 16) * 3.4;
-    lean = 0.09 + Math.sin(t * 16) * 0.04;
+    bob = Math.sin(t * 16) * 2.4;
+    lean = 0.08 + Math.sin(t * 16) * 0.04;
   } else if (anim.state === "jump") {
-    bob = -anim.jumpY - 8;
-    stretchY = 0.9;
-    stretchX = 1.08;
+    bob = -anim.jumpY - 6;
   } else if (anim.state === "attack") {
-    bob = Math.sin(anim.attackT * Math.PI) * -1.8;
+    bob = Math.sin(anim.attackT * Math.PI) * -1.2;
   } else {
-    bob = Math.sin(t * 2.2) * 0.8;
+    bob = Math.sin(t * 2.2) * 0.5;
   }
 
-  const unit = UNIT * (a.scale ?? 1) * BASE_SCALE;
+  const scale = drawScale(WORLD_SCALE * (a.scale ?? 1));
+  const px = -(FRAME / 2) * scale;
+  const py = -(FRAME - 0.5) * scale;
 
   ctx.save();
   ctx.translate(a.x, a.y + bob);
-  ctx.scale(face * stretchX, stretchY);
+  ctx.scale(face, 1);
   ctx.rotate(lean * face);
-
-  ctx.fillStyle = "rgba(0,0,0,0.34)";
-  ctx.beginPath();
-  ctx.ellipse(0, 2, 14 * unit * 0.45, 4 * unit * 0.28, 0, 0, Math.PI * 2);
-  ctx.fill();
-
   ctx.imageSmoothingEnabled = false;
+
+  ctx.fillStyle = "rgba(0,0,0,0.3)";
+  ctx.beginPath();
+  ctx.ellipse(0, 2, 10 * scale * 0.45, 3 * scale * 0.3, 0, 0, Math.PI * 2);
+  ctx.fill();
 
   const visuals = resolveVisualGear(a, opts?.gear);
   const shield = visuals.find((g) => g.packSlot === "shield");
@@ -198,33 +196,30 @@ export function drawCharacterSprite(
   const hands = visuals.find((g) => g.packSlot === "hands");
   const back = visuals.find((g) => g.packSlot === "back");
 
-  const ax = 0;
-  const ay = -16;
+  const blit = (path: string) => {
+    const img = charImage(path);
+    if (!img.complete || img.naturalWidth <= 0) return;
+    ctx.drawImage(img, px, py, FRAME * scale, FRAME * scale);
+  };
 
-  if (back?.packPath) blit(ctx, back.packPath, ax, ay, unit);
-  if (shield) hold(ctx, shield.packPath, shield.packKind || "shield", anim, unit, -1);
-
-  // BODY — chest armor replaces nude base (tiles are full-body)
-  if (chest?.packPath) {
-    blit(ctx, chest.packPath, ax, ay, unit);
-  } else {
-    blit(ctx, pack.base.body, ax, ay, unit);
-  }
-
-  if (feet?.packPath) blit(ctx, feet.packPath, ax, ay, unit);
-  if (hands?.packPath) blit(ctx, hands.packPath, ax, ay, unit);
-  if (head?.packPath) blit(ctx, head.packPath, ax, ay, unit);
+  if (back?.packPath) blit(back.packPath);
+  if (chest?.packPath) blit(chest.packPath);
+  else blit(pack.base.body);
+  if (feet?.packPath) blit(feet.packPath);
+  if (hands?.packPath) blit(hands.packPath);
+  if (head?.packPath) blit(head.packPath);
   else {
     const hairVis = pack.visuals.find((v) => v.kind === "hair");
-    if (hairVis && a.female) blit(ctx, hairVis.path, ax, ay, unit);
+    if (hairVis && a.female) blit(hairVis.path);
   }
 
-  if (weapon) hold(ctx, weapon.packPath, weapon.packKind || "blade", anim, unit, 1);
+  if (shield) hold(ctx, shield.packPath, shield.packKind || "shield", anim, scale, -1);
+  if (weapon) hold(ctx, weapon.packPath, weapon.packKind || "blade", anim, scale, 1);
 
   if (a.hurt > 0) {
     ctx.globalAlpha = a.hurt * 0.45;
     ctx.fillStyle = "#fff";
-    ctx.fillRect(-12 * unit, -28 * unit, 24 * unit, 28 * unit);
+    ctx.fillRect(px, py, FRAME * scale, FRAME * scale);
     ctx.globalAlpha = 1;
   }
 
@@ -232,51 +227,34 @@ export function drawCharacterSprite(
   return true;
 }
 
-function blit(
-  ctx: CanvasRenderingContext2D,
-  path: string,
-  ox: number,
-  oy: number,
-  unit: number,
-): void {
-  const img = charImage(path);
-  if (!img.complete || img.naturalWidth <= 0) return;
-  const w = img.naturalWidth * unit;
-  const h = img.naturalHeight * unit;
-  ctx.drawImage(img, ox * unit - w / 2, oy * unit - h / 2, w, h);
-}
-
 function hold(
   ctx: CanvasRenderingContext2D,
   path: string,
   kind: string,
   anim: CharAnim,
-  unit: number,
+  scale: number,
   side: number,
 ): void {
   const img = charImage(path);
   if (!img.complete || img.naturalWidth <= 0) return;
   const grip = gripFor(kind);
 
-  // Inventory-style tiles — never stamp full-frame over the body
   let angle = side > 0 ? -0.9 : 0.35;
   if (anim.state === "attack" && side > 0) {
     angle = -0.9 + Math.sin(anim.attackT * Math.PI) * 1.35;
   } else if (anim.state === "walk" || anim.state === "run") {
     const speed = anim.state === "run" ? 16 : 10;
     angle += Math.sin(anim.time * speed) * 0.1 * side;
-  } else if (anim.state === "jump") {
-    angle -= 0.2 * side;
   }
 
-  const handScale = 0.55 * (grip.scale || 1);
-  const w = img.naturalWidth * unit * handScale;
-  const h = img.naturalHeight * unit * handScale;
-  const hx = side > 0 ? 11 : -10;
-  const hy = -10;
+  const handScale = 0.5 * (grip.scale || 1) * scale;
+  const w = img.naturalWidth * handScale;
+  const h = img.naturalHeight * handScale;
+  const hx = (side > 0 ? 10 : -9) * scale;
+  const hy = -10 * scale;
 
   ctx.save();
-  ctx.translate(hx * unit, hy * unit);
+  ctx.translate(hx, hy);
   ctx.rotate(angle);
   ctx.drawImage(img, -w * 0.3, -h * 0.75, w, h);
   ctx.restore();
