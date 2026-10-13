@@ -60,6 +60,7 @@ import {
 } from "./content";
 import type { GraveBody } from "./social-types";
 import { drawActor, drawMonster, drawSetAura, drawShadowName, fxColor } from "./sprites";
+import { initActorSprites } from "./actor-sprites";
 import {
   BIOME_LABEL,
   TAVERNS,
@@ -347,6 +348,8 @@ export class TurbzGame {
 		this.running = true;
 		this.bind();
 		this.resize();
+		// Character sheets are optional art: procedural actors cover the gap until they load.
+		void initActorSprites().catch(() => {});
 		publish({
 			hasSave: !!localStorage.getItem(SAVE_KEY),
 			mode: "title"
@@ -3847,6 +3850,7 @@ export class TurbzGame {
 					x: pos.x,
 					y: pos.y,
 					race: "vesper",
+					npcId: npc.id,
 					female: npc.female,
 					hair: npc.hair,
 					skin: npc.outfit % 5,

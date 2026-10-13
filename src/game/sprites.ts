@@ -49,6 +49,10 @@ export type ActorDraw = {
   setOn: boolean;
   scale?: number;
   ghost?: boolean;
+  /** Class id, when the actor knows which class it is. */
+  classId?: string;
+  /** NPC id from content.NPCS: selects that NPC's sheet character. */
+  npcId?: string;
   /** Enchant clock. Keeps motes moving when the body is still. */
   time?: number;
 };
