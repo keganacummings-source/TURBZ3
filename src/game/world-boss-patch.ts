@@ -50,7 +50,7 @@ export function applyWorldBossPatch(game: any): void {
   const origOpenInspect = game.openInspect?.bind(game);
   game.openInspect = function openInspect(x: number, y: number, sx: number, sy: number) {
     if (this.save?.map === BOSS_MAP_ID && this.bossExitPortal) {
-      const d = const d = Math.hypot(x - this.bossExitPortal.x, y - this.bossExitPortal.y);
+      const d = Math.hypot(x - this.bossExitPortal.x, y - this.bossExitPortal.y);
       if (d < 48) {
         leaveBossDen(this);
         return;
