@@ -8,13 +8,13 @@ import { loadAtlas, drawAtlasSprite, type Atlas } from "./sprite-atlas";
 import {
   ACTOR_ATLASES,
   ACTOR_SPRITE_SCALE,
-  ACTOR_WALK_FRAMES,
+  actorWalkFrame,
   CLASS_SLOTS,
   NPC_BAND,
   NPC_SHEET,
   NPC_SLOTS_BY_ID,
   RACE_SLOTS,
-  ROW_DOWN,
+  ACTOR_DIRECTION_ROWS,
   resolveSlot,
   spriteKey,
   type SheetId,
@@ -24,14 +24,23 @@ import {
 let atlases: Partial<Record<SheetId, Atlas>> = {};
 let ready = false;
 
-export async function initActorSprites(): Promise<void> {
-  const loaded = await Promise.all(
+let loading: Promise<void> | null = null;
+
+export function initActorSprites(): Promise<void> {
+  if (ready) return Promise.resolve();
+  if (loading) return loading;
+  loading = Promise.all(
     ACTOR_ATLASES.map(async ({ id, spec }) => [id, await loadAtlas(spec)] as const),
-  );
-  const next: Partial<Record<SheetId, Atlas>> = {};
-  for (const [id, atlas] of loaded) next[id] = atlas;
-  atlases = next;
-  ready = true;
+  ).then((loaded) => {
+    const next: Partial<Record<SheetId, Atlas>> = {};
+    for (const [id, atlas] of loaded) next[id] = atlas;
+    atlases = next;
+    ready = true;
+  }).catch((error) => {
+    loading = null;
+    throw error;
+  });
+  return loading;
 }
 
 export function actorSpritesReady(): boolean {
@@ -64,12 +73,12 @@ export function tryDrawActorSprite(ctx: CanvasRenderingContext2D, a: ActorDraw):
 
   if (a.setOn && a.setFx) drawSetAura(ctx, a.x, a.y, a.setFx, fxT, s / ACTOR_SPRITE_SCALE);
 
-  const step = Math.floor(a.walk * 6) % ACTOR_WALK_FRAMES;
-  const key = spriteKey(slot, ROW_DOWN, Math.abs(step));
+  const step = actorWalkFrame(a.walk, a.moving ?? a.walk > 0.2);
+  const key = spriteKey(slot, ACTOR_DIRECTION_ROWS[a.direction ?? "down"], Math.abs(step));
 
   ctx.save();
   ctx.translate(a.x, a.y);
-  const bob = Math.sin(a.walk * 8) * (a.walk > 0.2 ? 1.2 : 0.25);
+  const bob = a.moving === false ? 0 : Math.sin(a.walk * Math.PI / 2) * 0.5;
   ctx.translate(0, bob);
   if (a.attack > 0) ctx.translate(4 * a.attack, 0);
 
@@ -77,7 +86,8 @@ export function tryDrawActorSprite(ctx: CanvasRenderingContext2D, a: ActorDraw):
     dx: 0,
     dy: 0,
     scale: s,
-    flipX: a.facing < 0,
+    // Directional rows already contain the correct orientation.
+    flipX: false,
     anchor: "bottom-center",
   });
 

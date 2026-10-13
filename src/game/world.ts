@@ -1,3 +1,4 @@
+import { drawAtlasTile, tileImageRevision } from "./tile-atlas";
 import {
   ANIMAL_BIOME,
   ANIMAL_BY_ID,
@@ -14,7 +15,7 @@ import {
   type Rng,
 } from "./content";
 
-export type Tile = { floor: number; biome: number; block: number; decor: number };
+export type Tile = { floor: number; biome: number; block: number; decor: number; sprite?: string };
 
 export const BIOMES: BiomeId[] = ["void", "frost", "verdant", "crown", "bone", "tide", "ashen"];
 
@@ -27,6 +28,7 @@ export type Spawn = {
   y: number;
   level: number;
   boss?: boolean;
+  dungeonBoss?: boolean;
   bossId?: string;
   template?: number;
   type?: string;
@@ -39,6 +41,7 @@ export type WorldData = {
   tiles: Tile[];
   spawns: Spawn[];
   cache: HTMLCanvasElement | null;
+  entry?: { x: number; y: number };
 };
 
 const REGION_DESIGN: { id: BiomeId; x: number; y: number; r: number }[] = [
@@ -89,7 +92,7 @@ function noise(x: number, y: number, seed: number): number {
 }
 
 export function biomeIndex(x: number, y: number, seed: number): number {
-  const n = noise(x, y, seed);
+  const n = noise(Math.floor(x / 24), Math.floor(y / 24), seed);
   let best = 3;
   let bestD = 99;
   REGION.forEach((r, i) => {
@@ -106,34 +109,38 @@ export function idx(x: number, y: number, w = WORLD_W): number {
   return y * w + x;
 }
 
-export function buildWorld(seed: number): WorldData {
+export function buildWorld(seed: number, hardcore = false): WorldData {
+  // The frontier has its own seed, river basin, lakes, forests and regional layout.
+  seed = (seed ^ (hardcore ? 0x6a09e667 : 0x3c6ef372)) >>> 0;
+  const terrain = (x: number, y: number) => {
+    const gx = Math.floor(x / 20), gy = Math.floor(y / 20);
+    const fx = (x / 20 - gx), fy = (y / 20 - gy);
+    const a = noise(gx, gy, seed), b = noise(gx + 1, gy, seed), c = noise(gx, gy + 1, seed), d = noise(gx + 1, gy + 1, seed);
+    return (a * (1-fx) + b * fx) * (1-fy) + (c * (1-fx) + d * fx) * fy;
+  };
   const w = WORLD_W;
   const h = WORLD_H;
   const tiles: Tile[] = new Array(w * h);
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const edge = x <= 1 || y <= 1 || x >= w - 2 || y >= h - 2;
-      const b = biomeIndex(x, y, seed);
+      const b = biomeIndex(hardcore ? WORLD_W - x : x, hardcore ? WORLD_H - y : y, seed);
       const biome = BIOMES[b]!;
       let floor = 0;
       let block = 0;
       let decor = 0;
       if (edge) block = 1;
-      else if (x >= w - 18) {
-        floor = 2;
-        block = 1;
-      } else if (Math.abs(y - Math.round(23 * (h / 96))) <= 1 && x > Math.round(36 * (w / 140)) && x < Math.round(62 * (w / 140))) {
-        const bridgeAt = [42, 50, 58].map((n) => Math.round(n * (w / 140)));
-        const bridge = bridgeAt.some((b) => Math.abs(x - b) <= 2);
-        floor = bridge ? 4 : 2;
-        block = bridge ? 0 : 1;
+      else if (x > w - 14 - Math.round(terrain(x, y) * 12) ||
+        Math.abs(x - ((hardcore ? .43 : .61) * w + Math.sin(y / (hardcore ? 23 : 37) + (seed % 19)) * (hardcore ? 32 : 20))) < (hardcore ? 3 : 2) ||
+        terrain(x, y) < (hardcore ? .16 : .11)) {
+        floor = 2; block = 1;
       } else {
         floor =
           biome === "tide" ? 4 : biome === "frost" ? 5 : biome === "ashen" ? 6 : biome === "void" ? 7 : biome === "bone" ? 8 : biome === "crown" ? 9 : 0;
-        const n = noise(x, y, seed + 9);
-        if (biome !== "crown" && biome !== "bone" && n > 0.86) {
+        const n = terrain(x, y);
+        if (biome !== "crown" && biome !== "bone" && n > (hardcore ? .52 : .62)) {
           decor = biome === "verdant" || biome === "tide" ? 1 : 2;
-        } else if (n > 0.8) decor = biome === "verdant" ? 3 : biome === "bone" ? 4 : 5;
+        } else if (n > .55) decor = biome === "verdant" ? 3 : biome === "bone" ? 4 : 5;
       }
       tiles[idx(x, y)] = { floor, biome: b, block, decor };
     }
@@ -145,7 +152,12 @@ export function buildWorld(seed: number): WorldData {
   carveRoad(tiles, w, ...ends(42, 16, 64, 12));
   carveRoad(tiles, w, ...ends(30, 32, 40, 44));
   carveRoad(tiles, w, ...ends(64, 12, 68, 34));
-  buildings(tiles, w);
+  // Streets connect every keeper to the central hearth; frontier tracks connect shelters.
+  for (const n of NPCS) if (n.map === "world") {
+    const p = scaleTile(n.tx, n.ty), home = scaleTile(30, 32);
+    carveRoad(tiles, w, home.tx, home.ty, p.tx, p.ty);
+  }
+  if (!hardcore) buildings(tiles, w);
   const taverns = stampTaverns(tiles, w);
   const clear = (tx: number, ty: number) => {
     const t = tiles[idx(tx, ty)];
@@ -181,7 +193,34 @@ export function buildWorld(seed: number): WorldData {
   const reached = linkMainland(tiles, w, h);
   const rng = mulberry32(seed);
   const spawns = spawnMobs(rng, tiles, w, h, reached);
+  // Resource groves sit on connected ground, including a starter grove and pond.
+  const home = scaleTile(30, 32);
+  for (let y = 8; y < h - 8; y += 18) for (let x = 8; x < w - 8; x += 21) {
+    const t = tiles[idx(x, y, w)]!;
+    if (!reached[idx(x, y, w)] || t.block || t.floor === 3 || t.floor === 9 || t.floor === 2) continue;
+    if (terrain(x, y) < .4) continue;
+    t.decor = 1;
+    spawns.push({ id: `tree-${x}-${y}`, kind: "node", node: "tree", x: x * TILE + 16, y: y * TILE + 16, level: 1 });
+  }
+  for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
+    const t = tiles[idx(home.tx + dx, home.ty + dy, w)]!;
+    t.block = 0; t.floor = 9; t.decor = 0;
+  }
+  const grove = tiles[idx(home.tx + 2, home.ty + 1, w)]!; grove.decor = 1;
+  spawns.push({ id: "starter-tree", kind: "node", node: "tree", x: (home.tx + 2) * TILE + 16, y: (home.ty + 1) * TILE + 16, level: 1 });
+  // Small protected well pond within walking distance of the hearth.
+  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+    const t = tiles[idx(home.tx - 6 + dx, home.ty + 5 + dy, w)]!;
+    t.floor = 2; t.block = 1; t.decor = 0;
+  }
+  const ground = ["grass_0_new.png", "ice_0_new.png", "grass_0_new.png", "dirt_full_new.png", "limestone_0.png", "sand_1.png", "volcanic_floor_0.png"];
+  for (const t of tiles) {
+    if (t.floor === 1) continue; // Existing settlement walls keep their architectural renderer.
+    t.sprite = t.floor === 2 ? "/MapAssets/03_Water_and_Liquid_Tiles/shoals_shallow_water_0.png" :
+      `/MapAssets/01_Floor_and_Ground_Tiles/${t.floor === 3 ? "dirt_full_new.png" : t.floor === 4 || t.floor === 9 ? "sandstone_floor_0.png" : ground[t.biome]}`;
+  }
   return { w, h, tiles, spawns, cache: null };
+
 }
 
 function ends(x0: number, y0: number, x1: number, y1: number): [number, number, number, number] {
@@ -466,6 +505,7 @@ export function paintWorld(world: WorldData): HTMLCanvasElement {
   for (let y = 0; y < world.h; y++) {
     for (let x = 0; x < world.w; x++) {
       const t = world.tiles[idx(x, y, world.w)]!;
+      if (t.sprite && drawAtlasTile(g, t.sprite, x * TILE, y * TILE, TILE)) continue;
       g.fillStyle = FLOOR_COLOR[t.floor] ?? "#333";
       g.fillRect(x * TILE, y * TILE, TILE, TILE);
       if ((x + y) % 2 === 0) {
@@ -531,8 +571,65 @@ export function paintWorld(world: WorldData): HTMLCanvasElement {
   return c;
 }
 
-/** Paint only the camera window. The overworld is too large for one bitmap. */
+type TerrainWindow = {
+  canvas: HTMLCanvasElement;
+  left: number;
+  top: number;
+  revision: number;
+  tiles: Tile[];
+};
+// One bounded window per world; abandoned worlds and their canvases can be collected.
+const terrainWindows = new WeakMap<WorldData, TerrainWindow>();
+
+/** Reuse static terrain until the camera approaches its edge or new art loads. */
 export function drawWorldSlice(
+  ctx: CanvasRenderingContext2D,
+  world: WorldData,
+  camX: number,
+  camY: number,
+  viewW: number,
+  viewH: number,
+  zoom: number,
+): void {
+  const z = Math.max(0.2, zoom);
+  const w = viewW / z;
+  const h = viewH / z;
+  const pad = 150;
+  const width = Math.ceil((w + pad * 2) / TILE) * TILE;
+  const height = Math.ceil((h + pad * 2) / TILE) * TILE;
+  // Bound bitmap memory for extremely large displays / far zooms.
+  if (width * height > 4 * 1024 * 1024) {
+    paintWorldSlice(ctx, world, camX, camY, viewW, viewH, zoom);
+    return;
+  }
+  const revision = tileImageRevision();
+  let cached = terrainWindows.get(world);
+  const inset = 80; // Retain room for canopies, shrines and screen shake.
+  if (!cached || cached.revision !== revision || cached.tiles !== world.tiles ||
+      cached.canvas.width !== width || cached.canvas.height !== height ||
+      camX - w / 2 < cached.left + inset ||
+      camY - h / 2 < cached.top + inset ||
+      camX + w / 2 > cached.left + width - inset ||
+      camY + h / 2 > cached.top + height - inset) {
+    const canvas = cached?.canvas ?? document.createElement("canvas");
+    if (canvas.width !== width) canvas.width = width;
+    if (canvas.height !== height) canvas.height = height;
+    const g = canvas.getContext("2d")!;
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, width, height);
+    const left = Math.floor((camX - w / 2 - pad) / TILE) * TILE;
+    const top = Math.floor((camY - h / 2 - pad) / TILE) * TILE;
+    g.imageSmoothingEnabled = false;
+    g.translate(-left, -top);
+    paintWorldSlice(g, world, left + width / 2, top + height / 2, width, height, 1);
+    cached = { canvas, left, top, revision, tiles: world.tiles };
+    terrainWindows.set(world, cached);
+  }
+  ctx.drawImage(cached.canvas, cached.left, cached.top);
+}
+
+/** Paint only the camera window. The overworld is too large for one bitmap. */
+function paintWorldSlice(
   ctx: CanvasRenderingContext2D,
   world: WorldData,
   camX: number,
@@ -554,6 +651,7 @@ export function drawWorldSlice(
   for (let y = y0; y <= y1; y++) {
     for (let x = x0; x <= x1; x++) {
       const t = world.tiles[idx(x, y, world.w)]!;
+      if (t.sprite && drawAtlasTile(ctx, t.sprite, x * TILE, y * TILE, TILE)) continue;
       ctx.fillStyle = FLOOR_COLOR[t.floor] ?? "#333";
       ctx.fillRect(x * TILE, y * TILE, TILE, TILE);
       if ((x + y) % 2 === 0) {
@@ -622,6 +720,7 @@ export function drawWorldSlice(
 }
 
 function paintTree(g: CanvasRenderingContext2D, x: number, y: number): void {
+  if (drawAtlasTile(g, "/MapAssets/04_Trees_and_Vegetation/tree_1_yellow.png", x - 32, y - 64, 64)) return;
   g.fillStyle = "rgba(0,0,0,0.28)";
   g.beginPath();
   g.ellipse(x, y + 4, 34, 10, 0, 0, Math.PI * 2);
@@ -648,6 +747,7 @@ function paintTree(g: CanvasRenderingContext2D, x: number, y: number): void {
 }
 
 export function drawRift(g: CanvasRenderingContext2D, x: number, y: number): void {
+  if (drawAtlasTile(g, "/MapAssets/06_Gates_and_Portals/enter_abyss.png", x - 32, y - 56, 64)) return;
   g.fillStyle = "rgba(10, 4, 18, 0.45)";
   g.beginPath();
   g.ellipse(x, y + 8, 78, 22, 0, 0, Math.PI * 2);

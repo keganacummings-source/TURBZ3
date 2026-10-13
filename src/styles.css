@@ -84,6 +84,7 @@
 
 .px-btn:hover {
   background: #3a221c;
+  color: var(--color-bone);
 }
 
 .px-btn:disabled {
@@ -440,3 +441,44 @@
   border-color: var(--color-kyo);
   box-shadow: 4px 4px 0 var(--color-blood);
 }
+
+/* Designer tools share the game's pixel panel and button palette. */
+.designer-screen { pointer-events: auto; position: absolute; inset: 0; overflow: auto; padding: 24px; background: var(--color-ink); color: var(--color-bone, #f0e2c8); }
+.designer-header { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:16px; margin-bottom:24px; }
+.designer-tool-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr)); gap:24px; max-width:1000px; }
+.designer-tool { padding:24px; text-align:left; display:grid; gap:16px; }
+.designer-toolbar { display:flex; flex-wrap:wrap; align-items:end; gap:12px; padding:12px; }
+.designer-screen label { display:grid; gap:4px; min-width:0; }
+.designer-screen input, .designer-screen select { max-width:100%; min-width:0; }
+.designer-screen select { background:var(--color-ink); color:var(--color-bone, #f0e2c8); border:2px solid var(--color-dim, #aa9981); min-height:44px; padding:8px; }
+.designer-toolbar input[type=number] { width:80px; }
+.designer-status { color:var(--color-kyo, #e6c15a); padding:16px 0; }
+.designer-workspace { display:grid; grid-template-columns:260px minmax(0,1fr); gap:20px; }
+.designer-palette { padding:12px; display:flex; flex-direction:column; gap:12px; }
+.tile-palette { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; max-height:480px; overflow:auto; }
+.tile-choice { border:2px solid transparent; min-width:44px; min-height:44px; padding:4px; background:var(--color-panel, #2a2220); }
+.tile-choice.selected { border-color:var(--color-kyo, #e6c15a); }
+.tile-choice img { width:40px; height:40px; object-fit:contain; image-rendering:pixelated; }
+.map-builder-viewport { overflow:auto; height:480px; width:100%; border:2px solid var(--color-dim, #aa9981); background:var(--color-panel, #2a2220); }
+.map-builder-canvas { position:sticky; top:0; left:0; touch-action:none; image-rendering:pixelated; display:block; }
+.weapon-workspace { display:grid; grid-template-columns:320px minmax(0,400px); gap:24px; padding:24px; max-width:820px; }
+.weapon-pixel-canvas { width:256px; height:256px; max-width:100%; image-rendering:pixelated; touch-action:none; border:2px solid var(--color-kyo, #e6c15a); }
+@media(max-width:700px) { .designer-screen { padding:12px; } .designer-workspace { grid-template-columns:minmax(0,1fr); } .tile-palette { grid-template-columns:repeat(6,1fr); max-height:160px; } .weapon-workspace { grid-template-columns:minmax(0,1fr); padding:12px; } .map-builder-viewport { height:380px; } .designer-toolbar > label { flex:1 1 120px; } }
+
+.designer-screen { touch-action: auto; }
+.designer-screen .px-input { background:var(--color-ink); color:var(--color-bone); border:2px solid var(--color-dim); min-height:44px; padding:8px; width:100%; }
+
+.verse-name { text-align: left; border-bottom: 1px dotted currentColor; padding: 4px 0; }
+.verse-description { display: none; margin-top: 8px; padding: 8px; border-left: 3px solid #d5a94d; background: #16131c; }
+.verse-card:hover .verse-description, .verse-card:focus-within .verse-description, .verse-description.verse-open { display: block; }
+.survival-meter { display: block; width: 100%; height: 12px; accent-color: #d5a94d; }
+.survival-hud { font-size: 16px; }
+.survival-hud { position: absolute; top: 236px; left: 8px; z-index: 12; max-width: min(340px, calc(100vw - 16px)); padding: 6px 8px; background: #211811; border: 2px solid #e4d4b8; }
+@media (width <= 760px) {
+  .survival-hud { top: 124px; right: 8px; max-width: none; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; font-size: 14px; padding: 2px 4px; }
+  .survival-hud .px-btn { padding: 2px 4px; }
+}
+
+.inventory-tools { display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr) 130px; }
+.inventory-tools .px-input { min-width: 0; width: 100%; }
+@media (width <= 760px) { .inventory-tools { grid-template-columns: minmax(0, 1fr); } }

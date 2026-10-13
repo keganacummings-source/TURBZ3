@@ -1,6 +1,13 @@
 // @ts-nocheck
+import { itemUseProblem, bestFood } from "./item-use";
+import { normalizeSurvival, advanceSurvival, consumeMaterials, craftAtCamp, waterWithinReach, FOOD, type SurvivalState } from "./survival";
+import { normalizeAbilities, spendAbilityPoint, abilityMultiplier, POINTS_PER_LEVEL } from "./ability-progression";
+import { advanceDungeonClock, buildProceduralDungeon, normalizeDungeonState, DUNGEON_INTERVAL, type DungeonState } from "./procedural-dungeon";
 import { P2PRoom } from "@/lib/multiplayer";
 import {
+  CLASS_BY_ID,
+  LEGACY_CLASS,
+  type ClassId,
   ENCHANT_BY_ID,
   ANIMAL_BY_ID,
   ITEM_BY_ID,
@@ -25,6 +32,8 @@ import {
   formTag,
   huntMove,
   gearPrice,
+  equipmentStats,
+  migrateEquipment,
   gearScore,
   learnPool,
   mulberry32,
@@ -60,6 +69,7 @@ import {
 } from "./content";
 import type { GraveBody } from "./social-types";
 import { drawActor, drawMonster, drawSetAura, drawShadowName, fxColor } from "./sprites";
+import { directionFromDelta, type ActorDirection } from "./actor-sheets.config";
 import { initActorSprites } from "./actor-sprites";
 import {
   BIOME_LABEL,
@@ -77,7 +87,7 @@ import {
   type WorldData,
 } from "./world";
 
-export type Panel = null | "bag" | "skills" | "quests" | "map" | "talk" | "shop" | "death" | "pause" | "trade" | "ghost" | "moves" | "chat" | "bounty" | "rebirth";
+export type Panel = null | "bag" | "skills" | "quests" | "map" | "talk" | "shop" | "death" | "pause" | "trade" | "ghost" | "moves" | "chat" | "bounty" | "rebirth" | "survival";
 export type Snap = {
   mode: "title" | "create" | "play";
   hasSave: boolean;
@@ -85,6 +95,10 @@ export type Snap = {
   name: string;
   race: RaceId;
   level: number;
+  dungeonCountdown: number;
+  dungeonPortals: { id: string; x: number; y: number; cleared: boolean }[];
+  skillPoints: number;
+  abilities: (Move & { rank: number })[];
   xp: number;
   xpNeed: number;
   hp: number;
@@ -106,7 +120,7 @@ export type Snap = {
   setCount: number;
   totals: { id: string; name: string; power: number }[];
   skills: { id: SkillId; name: string; level: number; xp: number; need: number; line: string }[];
-  bag: { id: string; name: string; count: number; about: string }[];
+  bag: { id: string; name: string; count: number; about: string; useProblem: string | null }[];
   death: { id: string; name: string; kind: "gear" | "item" }[];
   peers: string[];
   roomCode: string;
@@ -140,6 +154,11 @@ export type Snap = {
   grind: string;
   accountScore: number;
   turn: string;
+  survival: SurvivalState | null;
+  nearCamp: boolean;
+  nearWater: boolean;
+  nearTree: boolean;
+  sleeping: boolean;
   rules: "hunt" | "hardcore";
   duel: null | { phase: "answer" | "yours"; attacker: string; move: string; about: string; beat: string };
 };
@@ -150,7 +169,7 @@ type Mob = {
   id: string; species: string; name: string; type: TypeId; template: number;
   x: number; y: number; hp: number; max: number; level: number; boss: boolean; bossId?: string;
   homeX: number; homeY: number; cd: number; hurt: number; status: Status[]; alive: boolean; respawn: number;
-  rarity: number; facing: number; walk: number; swing: number; move: string; animal: boolean; witch: boolean;
+  rarity: number; direction: ActorDirection; facing: number; walk: number; swing: number; move: string; animal: boolean; witch: boolean;
   race: RaceId | null; lootGear: Gear[]; lootBag: Record<string, number>; lootKyo: number; huntIn: number; seen: boolean;
   ghost?: boolean; look?: GhostLook | null; speed?: number; master?: string; aggro?: boolean;
 };
@@ -162,7 +181,7 @@ type GhostPet = { species: string; level: number; rarity: number; look?: GhostLo
 type SkillState = Record<SkillId, { level: number; xp: number }>;
 type QuestState = Record<string, { n: number; n2: number; done: boolean }>;
 type Save = {
-  v: 3; name: string; race: RaceId; seed: number; x: number; y: number; map: MapId; level: number; xp: number; kyo: number; hp: number;
+  v: 3; dungeons?: DungeonState; skillPoints?: number; abilityRanks?: Record<string, number>; progressionVersion?: number; name: string; race: RaceId; classId?: ClassId; seed: number; x: number; y: number; map: MapId; level: number; xp: number; kyo: number; hp: number;
   bag: Record<string, number>; gear: Gear[]; equipped: Partial<Record<Slot, string>>; known: string[]; bar: string[];
   skills: SkillState; quests: QuestState; wins: number; catches: Record<string, number>; regions: string[];
   companion: GhostPet | null; box: GhostPet[]; bosses: Record<string, number>; talked: string[]; bestShrine: number;
@@ -183,6 +202,10 @@ const emptySnap = (): Snap => ({
 	name: "",
 	race: "vesper",
 	level: 1,
+	dungeonCountdown: 600,
+	dungeonPortals: [],
+	skillPoints: 0,
+	abilities: [],
 	xp: 0,
 	xpNeed: 30,
 	hp: 80,
@@ -238,6 +261,7 @@ const emptySnap = (): Snap => ({
 	grind: "",
 	accountScore: 0,
 	turn: "",
+	survival: null, nearCamp: false, nearWater: false, nearTree: false, sleeping: false,
 	rules: "hunt",
 	duel: null
 });
@@ -282,6 +306,7 @@ export class TurbzGame {
 	[k: string]: any;
 	mates: { x: number; y: number; swing: number }[] = [];
 	mateCd: Record<string, number> = {};
+	mateDirections: Record<string, ActorDirection> = {};
 	fightGap = 0;
 	turnQ: TurnStep[] = [];
 	fought = false;
@@ -310,6 +335,7 @@ export class TurbzGame {
 		this.shopStock = [];
 		this.zoom = 2.35;
 		this.facing = 1;
+		this.direction = "down";
 		this.role = "solo";
 		this.log = ["The veil remembers your skills. It does not remember your pockets."];
 		this.buff = { crit: 0, ward: 0, t: 0 };
@@ -345,6 +371,7 @@ export class TurbzGame {
 		this.zoom = 2.35;
 	}
 	start() {
+		if (this.running) return;
 		this.running = true;
 		this.bind();
 		this.resize();
@@ -382,6 +409,11 @@ export class TurbzGame {
 		};
 	}
 	stop() {
+		this.persist();
+		this.events?.abort();
+		this.resetInput();
+		this.music?.pause(); this.music = null; this.musicTried = false;
+		void this.audio?.close().catch(() => {}); this.audio = null;
 		this.running = false;
 		cancelAnimationFrame(this.raf);
 		this.room?.close();
@@ -394,10 +426,19 @@ export class TurbzGame {
 	setKeys(codes) {
 		this.qa = new Set(codes);
 	}
+	resetInput() {
+		this.keys.clear(); this.qa.clear(); this.stick.x = this.stick.y = 0;
+		this.vx = this.vy = 0; this.dest = null;
+		if (this.pointer) this.pointer.down = false;
+	}
 	bind() {
+		this.events?.abort();
+		this.events = new AbortController();
+		const options = { signal: this.events.signal };
 		const down = (e) => {
+			if (this.typing() || snap.mode !== "play" || this.dead || e.ctrlKey || e.metaKey || e.altKey) return;
 			this.keys.add(e.code);
-			if (this.typing()) return;
+			if (/^(Key[WASD]|Arrow(Up|Down|Left|Right))$/.test(e.code)) this.dest = null;
 			if ([
 				"ArrowUp",
 				"ArrowDown",
@@ -405,6 +446,7 @@ export class TurbzGame {
 				"ArrowRight",
 				"Space"
 			].includes(e.code)) e.preventDefault();
+			if (e.repeat) return;
 			if (e.code.startsWith("Digit")) {
 				const digit = Number(e.code.slice(5));
 				if (digit >= 1 && digit <= 9) this.cast(digit - 1);
@@ -415,23 +457,28 @@ export class TurbzGame {
 			if (e.code === "KeyQ") this.toggle("quests");
 			if (e.code === "KeyM") this.toggle("map");
 			if (e.code === "KeyG") this.toggle("ghost");
+			if (e.code === "KeyV") this.toggle("moves");
+			if (e.code === "KeyH" && this.rules === "hardcore") this.toggle("survival");
 			if (e.code === "KeyT") this.toggleTrade();
 			if (e.code === "Escape") this.escape();
 			this.unlock();
 		};
 		const up = (e) => this.keys.delete(e.code);
-		window.addEventListener("keydown", down);
-		window.addEventListener("keyup", up);
-		window.addEventListener("blur", () => {
-			this.keys.clear();
-			this.qa.clear();
-		});
+		window.addEventListener("keydown", down, options);
+		window.addEventListener("keyup", up, options);
+		window.addEventListener("blur", () => this.resetInput(), options);
+		window.addEventListener("focusin", () => { if (this.typing()) this.resetInput(); }, options);
+		window.addEventListener("pagehide", () => this.persist(), options);
+		document.addEventListener("visibilitychange", () => {
+			this.resetInput(); this.last = performance.now(); this.acc = 0;
+			if (document.hidden) this.persist();
+		}, options);
 		this.canvas.addEventListener("contextmenu", (e) => {
 			e.preventDefault();
 			const w = this.screenToWorld(e.clientX, e.clientY);
 			const r = this.canvas.getBoundingClientRect();
 			this.openInspect(w.x, w.y, e.clientX - r.left, e.clientY - r.top);
-		});
+		}, options);
 		this.canvas.addEventListener("pointerdown", (e) => {
 			this.unlock();
 			if (e.button === 2) return;
@@ -444,7 +491,7 @@ export class TurbzGame {
 				down: true
 			};
 			this.pointAt(w.x, w.y);
-		});
+		}, options);
 		this.canvas.addEventListener("pointermove", (e) => {
 			const w = this.screenToWorld(e.clientX, e.clientY);
 			this.hoverAt(w.x, w.y);
@@ -455,19 +502,20 @@ export class TurbzGame {
 				down: true
 			};
 			this.pointAt(w.x, w.y);
-		});
+		}, options);
 		this.canvas.addEventListener("pointerup", () => {
 			if (this.pointer) this.pointer.down = false;
-		});
+		}, options);
+		this.canvas.addEventListener("pointercancel", () => { if (this.pointer) this.pointer.down = false; }, options);
 		this.canvas.addEventListener("wheel", (e) => {
 			e.preventDefault();
 			this.zoom = Math.max(1.15, Math.min(3, this.zoom * (e.deltaY > 0 ? .92 : 1.08)));
-		}, { passive: false });
-		window.addEventListener("resize", () => this.resize());
+		}, { ...options, passive: false });
+		window.addEventListener("resize", () => this.resize(), options);
 	}
 	typing() {
 		const a = document.activeElement;
-		return !!a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA");
+		return !!a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" || a.tagName === "SELECT" || a.isContentEditable);
 	}
 	unlock() {
 		if (!this.audio) {
@@ -488,7 +536,9 @@ export class TurbzGame {
 				if (!(await fetch(`/music/${alt}`, { method: "HEAD" })).ok) return;
 				file = alt;
 			}
+			if (!this.running) return;
 			const audio = new Audio(`/music/${file}`);
+			this.music?.pause(); this.music = audio;
 			audio.loop = true;
 			audio.volume = .35;
 			await audio.play();
@@ -506,20 +556,17 @@ export class TurbzGame {
 		o.start();
 		o.stop(this.audio.currentTime + dur);
 	}
+	viewport = { w: 1, h: 1, dpr: 1 };
+	moving = false;
 	resize() {
 		const dpr = Math.min(1.75, window.devicePixelRatio || 1);
 		const r = this.canvas.getBoundingClientRect();
 		this.canvas.width = Math.max(1, Math.floor(r.width * dpr));
 		this.canvas.height = Math.max(1, Math.floor(r.height * dpr));
+		this.viewport = { w: r.width, h: r.height, dpr: this.canvas.width / Math.max(1, r.width) };
 	}
 	cssSize() {
-		const r = this.canvas.getBoundingClientRect();
-		const dpr = this.canvas.width / Math.max(1, r.width);
-		return {
-			w: r.width,
-			h: r.height,
-			dpr
-		};
+		return this.viewport;
 	}
 	screenToWorld(cx, cy) {
 		const r = this.canvas.getBoundingClientRect();
@@ -536,10 +583,10 @@ export class TurbzGame {
 		this.log = this.log.slice(0, 6);
 		this.syncHud(true);
 	}
-	begin(name, race, as) {
+	begin(name, race: RaceId, as, classId: ClassId = LEGACY_CLASS[race]) {
 		const seed = Math.random() * 1e9 | 0;
 		const rng = mulberry32(seed ^ 91);
-		const type = RACES.find((r) => r.id === race).type;
+		const type = CLASS_BY_ID[classId].type;
 		const weapon = rollGear(rng, {
 			level: 1,
 			slot: "weapon",
@@ -547,12 +594,13 @@ export class TurbzGame {
 			typeBias: type,
 			raceBias: race
 		});
-		const known = rollInnate(rng);
+		const known = [...CLASS_BY_ID[classId].starterMoves];
 		const home = hearthXY();
 		const save = {
 			v: 3,
 			name: (name || "Huntress").slice(0, 16),
 			race,
+			classId,
 			seed,
 			x: home.x,
 			y: home.y,
@@ -598,7 +646,7 @@ export class TurbzGame {
 			deathBanked: false
 		};
 		this.boot(save);
-		this.say(this.rules === "hardcore" ? `${save.name} wakes for the long grind. Skills are the score. Parties strike first.` : `${save.name} wakes at the Crownfall hearth.`);
+		this.say(this.rules === "hardcore" ? `${save.name} wakes in the frontier. Hunt, gather water, and build a fire. Healing spells mend lasting wounds.` : `${save.name} wakes at the Crownfall hearth.`);
 		if (as) this.openRoom(as.role, as.code);
 		this.tone(220, .12);
 	}
@@ -617,9 +665,13 @@ export class TurbzGame {
 		}
 	}
 	boot(save) {
+		this.direction = "down";
+		this.duel = null; this.sleeping = false;
 		this.normalize(save);
 		this.save = save;
-		this.dead = false;
+		this.overworld = buildWorld(save.seed, this.rules === "hardcore");
+		this.mobs = [];
+		this.dead = !!save.deathBanked;
 		this.secondUsed = false;
 		this.status = [];
 		this.shield = 0;
@@ -636,6 +688,7 @@ export class TurbzGame {
 		this.qa = this.qa ?? new Set();
 		this.loadMap(save.map, false);
 		if (blocked(this.world, save.x, save.y)) {
+			this.loadMap("world", true);
 			const home = nearestOpen(this.world, hearthXY().x, hearthXY().y);
 			save.x = home.x;
 			save.y = home.y;
@@ -646,7 +699,7 @@ export class TurbzGame {
 		this.cam.y = save.y;
 		publish({
 			mode: "play",
-			panel: null,
+			panel: this.dead ? "rebirth" : null,
 			hasSave: true
 		});
 		this.syncHud(true);
@@ -656,9 +709,14 @@ export class TurbzGame {
 		const save = this.save;
 		if (!save) return;
 		if (map === "world") {
-			if (!this.overworld) this.overworld = buildWorld(save.seed);
+			if (!this.overworld) this.overworld = buildWorld(save.seed, this.rules === "hardcore");
 			this.world = this.overworld;
 			this.world.cache = null;
+		} else if (map.startsWith("rift-")) {
+			const portal = save.dungeons.portals.find(p => p.id === map);
+			if (!portal) return this.loadMap("world", true);
+			this.world = buildProceduralDungeon(portal.seed, portal.level);
+			this.world.spawns = this.world.spawns.filter(s => !portal.defeated.includes(s.id));
 		} else {
 			this.world = buildDungeon(map, save.seed);
 			paintWorld(this.world);
@@ -677,9 +735,9 @@ export class TurbzGame {
 		const spiritKind = def.type === "spirit" || def.template === 16 || def.template === 23;
 		const ghost = !animal && (spiritKind || Math.random() < 0.55);
 		const hunter = Math.max(1, this.save?.level ?? s.level ?? 1);
-		const level = s.boss ? Math.max(s.level, hunter + 1 + (Math.random() * 4 | 0)) : levelNearHunter(hunter, Math.random());
-		const rarity = rarityForLevel(level, Math.random(), !!s.boss);
-		const max = animal ? Math.floor(14 + level * 7) : Math.floor((26 + level * 16) * (s.boss ? 6.5 : 1) * (1 + rarity * 0.45));
+		const level = s.dungeonBoss ? Math.max(1, s.level) : s.boss ? Math.max(s.level, hunter + 1 + (Math.random() * 4 | 0)) : levelNearHunter(hunter, Math.random());
+		const rarity = s.dungeonBoss ? 0 : rarityForLevel(level, Math.random(), !!s.boss);
+		const max = animal ? Math.floor(14 + level * 7) : Math.floor((26 + level * 16) * (s.dungeonBoss ? 3.0 : s.boss ? 6.5 : 1) * (1 + rarity * 0.45));
 		const type = s.type || def.type;
 		const moves = MOVES.filter((m) => m.type === type && m.effect !== "mend" && m.effect !== "shell");
 		const ranged = moves.filter((m) => attackForm(m) !== "melee");
@@ -700,6 +758,7 @@ export class TurbzGame {
 			max,
 			level,
 			boss: !!s.boss,
+			dungeonBoss: !!s.dungeonBoss,
 			bossId: s.bossId,
 			homeX: s.x,
 			homeY: s.y,
@@ -709,6 +768,7 @@ export class TurbzGame {
 			alive: true,
 			respawn: 0,
 			rarity,
+			direction: "down",
 			facing: 1,
 			walk: Math.random() * 6,
 			swing: 0,
@@ -739,15 +799,16 @@ export class TurbzGame {
 			this.vy = 0;
 			return;
 		}
+		if (document.hidden) return;
+		if (this.role !== "guest") this.tickDungeons(dt);
 		this.tickPlayer(dt);
+		if (this.dead) return;
 		if (this.role !== "guest") {
-			if (this.rules === "hardcore" && this.duel) this.tickGuestHurt(dt);
-			else this.tickMobs(dt);
-			if (this.rules === "hardcore") this.tickParties(dt);
+			this.tickMobs(dt);
 		} else this.tickGuestHurt(dt);
 		this.tickSpirits(dt);
-		if (this.rules === "hardcore") this.tickHardcore(dt);
-		else this.tickTurns(dt);
+		this.tickTurns(dt);
+		if (this.rules === "hardcore" && !this.dead) this.tickSurvival(dt);
 		this.tickParty(dt);
 		this.tickFx(dt);
 		this.netAcc += dt;
@@ -762,20 +823,97 @@ export class TurbzGame {
 		}
 		this.syncHud(false);
 	}
+	tickDungeons(dt) {
+		const save = this.save;
+		if (!save?.dungeons) return;
+		const before = save.dungeons.elapsed;
+		if (!advanceDungeonClock(save.dungeons, dt)) {
+			if (Math.floor(before / 30) !== Math.floor(save.dungeons.elapsed / 30)) this.persist();
+			return;
+		}
+		const state = save.dungeons;
+		const world = this.overworld ?? this.world;
+		const anchor = save.map === "world" ? save : hearthXY();
+		const rng = mulberry32(save.seed ^ state.sequence * 7919);
+		const at = nearestOpen(world, anchor.x + (rng() - .5) * 600, anchor.y + (rng() - .5) * 600);
+		state.portals.push({ id: `rift-${state.sequence}`, seed: (save.seed ^ state.sequence * 104729) >>> 0, level: save.level, x: at.x, y: at.y, cleared: false, defeated: [] });
+		this.say(`Dungeon ${state.sequence} has opened. Find its rift on the world map.`);
+		this.room?.send({ t: "dungeons", dungeons: state });
+		this.persist(); this.syncHud(true);
+	}
+	dungeonExitAt() { return this.world?.entry ?? dungeonExit(); }
+	trackRift(id) {
+		const portal = this.save?.dungeons?.portals.find(p => p.id === id && !p.cleared);
+		if (!portal || this.save.map !== "world") return;
+		if (Math.hypot(portal.x - this.save.x, portal.y - this.save.y) <= 120) { this.closePanel(); this.enterRift(id); }
+		else { this.closePanel(); this.walkTo(portal.x, portal.y); this.say("Tracking the dungeon rift. Interact at its entrance."); }
+	}
+	enterRift(id) {
+		const portal = this.save?.dungeons?.portals.find(p => p.id === id);
+		if (!portal || portal.cleared || this.save.map !== "world" || Math.hypot(portal.x - this.save.x, portal.y - this.save.y) > 120) return false;
+		const dungeon = buildProceduralDungeon(portal.seed, portal.level);
+		this.travel(id, dungeon.entry); return true;
+	}
+	nearCamp() {
+		const save = this.save;
+		return !!save?.survival?.campfires.some(c => c.map === save.map && Math.hypot(c.x - save.x, c.y - save.y) <= 80);
+	}
+	tickSurvival(dt) {
+		const s = this.save.survival, before = s.elapsed;
+		if (this.sleeping && (!this.nearCamp() || this.combat > 0 || this.inFight())) this.sleeping = false;
+		const damage = advanceSurvival(s, dt, this.sleeping);
+		if (damage > 0) { this.save.hp -= damage; if (this.save.hp <= 0) this.die(); }
+		if (this.sleeping && s.rest >= 100) { this.sleeping = false; this.say("Rested. Your wounds still need a healing spell."); }
+		if (Math.floor(before / 10) !== Math.floor(s.elapsed / 10)) this.persist();
+	}
+	survivalAction(action) {
+		const save = this.save;
+		if (!save || this.rules !== "hardcore" || this.dead) return;
+		if (action === "fire") {
+			if (this.nearCamp()) return this.say("A campfire is already nearby.");
+			if (blocked(this.world, save.x, save.y)) return;
+			if (!consumeMaterials(save.bag, { timber: 3 })) return this.say("Chop trees for 3 logs first.");
+			save.survival.campfires.push({ map: save.map, x: save.x, y: save.y });
+			save.survival.campfires = save.survival.campfires.slice(-100);
+			this.say("Campfire built. Each cook or boil uses another log.");
+		} else if (action === "water") {
+			if (this.channel) return;
+			if (!waterWithinReach(this.world, save.x, save.y)) return this.say("Stand beside a water tile to collect water.");
+			this.channel = { kind: "water", t: 0, need: 2 }; this.say("Collecting water...");
+		} else if (action === "chop") {
+			if (this.channel) return;
+			const nodes = this.world.spawns.filter(n => n.kind === "node" && n.node === "tree").concat(POIS.filter(p => p.kind === "node" && p.node === "tree").map(p => ({ ...p, ...poiPos(p) })));
+			const tree = nodes.find(n => Math.hypot(n.x - save.x, n.y - save.y) <= 64 && !(this.nodeCd[n.id] > 0));
+			if (!tree) return this.say("Stand beside a tree resource to chop logs.");
+			this.startNode(tree.id, "tree");
+		} else if (action === "sleep") {
+			if (this.sleeping) this.sleeping = false;
+			else {
+				if (!this.nearCamp()) return this.say("Build a campfire before sleeping.");
+				if (this.inFight() || this.combat > 0) return this.say("Clear nearby enemies before sleeping.");
+				this.dest = null; this.sleeping = true; this.autoplay = false; this.channel = null; this.closePanel(); this.say("Sleeping by the fire. Food and water still drain.");
+			}
+		} else {
+			if (!craftAtCamp(save.bag, action, this.nearCamp())) return this.say("Stand by a campfire with 1 log and raw meat, fish, or water.");
+			this.say(action === "purify" ? "Water purified. Drink it from your bag." : "Meal cooked. Eat it from your bag.");
+		}
+		this.persist(); this.syncHud(true);
+	}
 	held(code) {
 		return this.keys.has(code) || this.qa.has(code);
 	}
 	tickPlayer(dt) {
+		this.moving = false;
 		const save = this.save;
 		this.clock += dt;
-		const rooted = this.status.some((s) => s.id === "root" && s.t > 0);
+		const rooted = this.typing() || this.status.some((s) => (s.id === "root" || s.id === "sleep") && s.t > 0);
 		const sleep = this.status.some((s) => s.id === "sleep" && s.t > 0);
 		this.wardT = Math.max(0, this.wardT - dt);
 		this.rollT = Math.max(0, this.rollT - dt);
 		this.castLock = Math.max(0, this.castLock - dt);
 		if (!this.duel) this.defFatigue = Math.max(0, (this.defFatigue ?? 0) - dt * 0.35);
 		if (this.lunge) this.tickLunge(dt);
-		else if (this.autoplay && !(this.rules === "hardcore" && this.duel)) this.tickAutoplay(dt);
+		else if (this.autoplay && !this.typing() && !this.sleeping && !(this.rules === "hardcore" && this.duel)) this.tickAutoplay(dt);
 		else {
 			let ix = 0;
 			let iy = 0;
@@ -806,14 +944,14 @@ export class TurbzGame {
 			}
 			const mag = Math.hypot(ix, iy) || 1;
 			const soak = this.status.some((s) => s.id === "soak");
-			const speed = (rooted ? 0 : 118) * (soak ? .62 : 1);
+			const exhausted = this.rules === "hardcore" && save.survival.rest < 15;
+			const speed = (rooted || this.sleeping ? 0 : 118) * (soak ? .62 : 1) * (exhausted ? .7 : 1);
 			this.vx = ix / mag * speed;
 			this.vy = iy / mag * speed;
 			if (Math.abs(ix) > .2 || Math.abs(iy) > .2) {
 				this.tryMove(this.vx * dt, this.vy * dt);
 				this.walk += dt * 6;
-				if (ix < -.15) this.facing = -1;
-				else if (ix > .15) this.facing = 1;
+
 			}
 		}
 		this.cam.x += (save.x - this.cam.x) * Math.min(1, dt * 8);
@@ -826,7 +964,7 @@ export class TurbzGame {
 		this.attackT = Math.max(0, this.attackT - dt * 3);
 		if (this.status.find((s) => s.id === "burn")) this.hurtSelf(8 * dt, "burn");
 		const adv = save.skills.adventuring.level;
-		if (this.combat <= 0) save.hp = Math.min(this.maxHp(), save.hp + (1.2 + adv * .15) * dt);
+		if (this.rules !== "hardcore" && this.combat <= 0) save.hp = Math.min(this.maxHp(), save.hp + (1.2 + adv * .15) * dt);
 		this.combat = Math.max(0, this.combat - dt);
 		if (this.channel) {
 			this.channel.t += dt;
@@ -846,9 +984,14 @@ export class TurbzGame {
 	tryMove(dx, dy) {
 		const save = this.save;
 		const world = this.world;
+		const x = save.x;
+		const y = save.y;
 		const hit = (x, y) => blocked(world, x, y) || blocked(world, x - 7, y) || blocked(world, x + 7, y) || blocked(world, x, y - 6);
 		if (!hit(save.x + dx, save.y)) save.x += dx;
 		if (!hit(save.x, save.y + dy)) save.y += dy;
+		this.moving ||= save.x !== x || save.y !== y;
+		this.direction = directionFromDelta(save.x - x, save.y - y, this.direction);
+		if (save.x !== x) this.facing = save.x < x ? -1 : 1;
 	}
 	tickAutoplay(dt) {
 		const save = this.save;
@@ -890,9 +1033,10 @@ export class TurbzGame {
 		const dx = x - save.x;
 		const dy = y - save.y;
 		const l = Math.hypot(dx, dy) || 1;
-		const rooted = this.status.some((s) => s.id === "root" && s.t > 0);
+		const rooted = this.typing() || this.status.some((s) => (s.id === "root" || s.id === "sleep") && s.t > 0);
 		const soak = this.status.some((s) => s.id === "soak");
-		const speed = (rooted ? 0 : 118) * (soak ? .62 : 1);
+		const exhausted = this.rules === "hardcore" && save.survival.rest < 15;
+			const speed = (rooted || this.sleeping ? 0 : 118) * (soak ? .62 : 1) * (exhausted ? .7 : 1);
 		this.tryMove(dx / l * speed * dt, dy / l * speed * dt);
 		this.walk += dt * 6;
 		if (dx < -2) this.facing = -1;
@@ -1190,7 +1334,7 @@ export class TurbzGame {
 			return;
 		}
 		const phys = 1 + (save.skills.physical.level - 1) * .02;
-		let dmg = (11 + save.level * 2.4 + (weapon?.level ?? 1) * 1.6) * phys * this.stab(type) * tm;
+		let dmg = (11 + save.level * 2.4 + (weapon ? equipmentStats(weapon).damage : 8)) * phys * this.stab(type) * tm;
 		dmg *= 1 + this.chan("might") / 100;
 		dmg *= 1 + Math.min(.4, (save.skills.hunting.level - 1) * .004);
 		if (mob.boss) dmg *= 1 + this.chan("boss_bane") / 100;
@@ -1242,16 +1386,16 @@ export class TurbzGame {
 		const id = save.bar[index];
 		const move = id ? MOVE_BY_ID[id] : void 0;
 		if (!move) return;
-		if (this.rules === "hardcore") {
-			this.answerDuel(move);
-			return;
-		}
 		this.castMove(move);
 	}
 	arsenal(save) {
-		const ids = new Set(save.innate?.length ? save.innate : ["measured"]);
-		for (const g of save.gear) for (const id of ensureGearMoves(g)) if (MOVE_BY_ID[id]) ids.add(id);
-		return [...ids].map((id) => MOVE_BY_ID[id]).filter(Boolean);
+		return Object.keys(save.abilityRanks ?? {}).filter(id => MOVE_BY_ID[id]).map(id => MOVE_BY_ID[id]);
+	}
+	spendAbility(id) {
+		if (!this.save || this.dead || !spendAbilityPoint(this.save, id)) return false;
+		this.syncArsenal(this.save);
+		this.say(`${MOVE_BY_ID[id].name} rank ${this.save.abilityRanks[id]}.`);
+		this.persist(); this.syncHud(true); return true;
 	}
 	syncArsenal(save) {
 		const list = this.arsenal(save).map((m) => m.id);
@@ -1302,14 +1446,7 @@ export class TurbzGame {
 	}
 	castMove(move, prefer) {
 		const save = this.save;
-		if (!save || this.dead || snap.panel === "death") return false;
-		if (this.rules === "hardcore" && !this.duelAllow) {
-			const kind = reactOf(move);
-			if (kind !== "heal" && kind !== "guard") {
-				this.say("They have to step into range. You do not open.");
-				return false;
-			}
-		}
+		if (!save || this.dead || snap.panel === "death" || !save.abilityRanks?.[move.id]) return false;
 		if (this.castLock > 0 || this.lunge) return false;
 		if (this.status.some((s) => s.id === "sleep")) return false;
 		if ((this.cds[move.id] ?? 0) > 0) return false;
@@ -1336,15 +1473,16 @@ export class TurbzGame {
 		else if (target) this.facing = 1;
 		if (tactic === "ward") {
 			this.wardT = 3;
-			this.shield = Math.max(this.shield, 12 + move.power);
+			this.shield = Math.max(this.shield, (12 + move.power) * abilityMultiplier(save, move.id));
 			this.float(save.x, save.y - 48, "WARD", "#fff1a8");
 			this.say("Warded for three seconds.");
 			this.playMoveFx(move, save.x, save.y - 24, save.x, save.y - 24);
 			return true;
 		}
 		if (tactic === "heal" || move.effect === "mend") {
-			const heal = 18 + Math.max(8, move.power) * .45;
+			const heal = (18 + Math.max(8, move.power) * .45) * abilityMultiplier(save, move.id);
 			save.hp = Math.min(this.maxHp(), save.hp + heal);
+			if (this.rules === "hardcore") this.persist();
 			this.float(save.x, save.y - 48, `+${Math.floor(heal)}`, "#9ad8c8");
 			this.playMoveFx(move, save.x, save.y - 24, save.x, save.y - 20);
 			return true;
@@ -1472,7 +1610,8 @@ export class TurbzGame {
 		const melee = form === "melee" ? 1.35 : 1;
 		const read = bodyRead(mob.type);
 		const hide = form === "spell" || moveTactic(move) === "channel" ? read.kind === "magic" ? 1.2 : .8 : read.kind === "physical" ? 1.2 : .8;
-		let dmg = (6 + move.power * .42) * (1 + save.level * .045) * gearStab * tm * might * hunt * boss * gloom * phys * mag * melee * hide * mult * (fromPet ? .62 : 1) * (crit ? 1.75 : 1);
+		let dmg = (6 + move.power * .42 + (form !== "spell" && this.piece("weapon") ? equipmentStats(this.piece("weapon")).damage * .35 : 0)) * (1 + save.level * .045) * gearStab * tm * might * hunt * boss * gloom * phys * mag * melee * hide * mult * (fromPet ? .62 : 1) * (crit ? 1.75 : 1);
+		if (!fromPet) dmg *= abilityMultiplier(save, move.id);
 		if (form === "ranged") dmg = mitigate(dmg, this.mobArmor(mob));
 		if (mob.status.some((s) => s.id === "expose")) dmg *= 1.25;
 		dmg = Math.max(1, dmg);
@@ -1483,7 +1622,7 @@ export class TurbzGame {
 		}
 		for (let i = 0; i < hits; i++) this.damageMob(mob, dmg, crit && i === 0);
 		this.applyEffect(move, mob, true);
-		if (move.effect === "leech") save.hp = Math.min(this.maxHp(), save.hp + dmg * .35);
+		if (move.effect === "leech" && (this.rules !== "hardcore" || attackForm(move) === "spell")) save.hp = Math.min(this.maxHp(), save.hp + dmg * .35);
 		mob.status = mob.status.filter((s) => s.id !== "sleep");
 	}
 	damageMob(mob, dmg, crit) {
@@ -1501,6 +1640,7 @@ export class TurbzGame {
 		this.applyMobDamage(mob, amount, crit);
 	}
 	applyMobDamage(mob, amount, crit = false) {
+		if (!mob?.alive || !Number.isFinite(amount) || amount <= 0 || this.dead) return;
 		mob.hp -= amount;
 		mob.hurt = 1;
 		this.float(mob.x, mob.y - 30, `${amount}${crit ? "!" : ""}`, crit ? "#fff1a8" : "#f0e2c8");
@@ -1510,16 +1650,23 @@ export class TurbzGame {
 	}
 	killMob(mob) {
 		const save = this.save;
+		if (!save || !mob?.alive || this.dead) return;
 		mob.alive = false;
 		mob.hp = 0;
 		mob.respawn = mob.boss ? 70 : 22;
+		const portal = save.dungeons?.portals.find(p => p.id === save.map);
+		if (portal) {
+			if (!portal.defeated.includes(mob.id)) portal.defeated.push(mob.id);
+			if (mob.boss) { portal.cleared = true; this.say("Dungeon cleared. Return through the entrance rift."); }
+			this.room?.send({ t: "dungeons", dungeons: save.dungeons });
+		}
 		const xp = Math.floor((8 + mob.level * 3) * (mob.boss ? 4 : 1) * (1 + this.chan("xp_boost") / 100));
 		this.gainXp(xp);
 		this.gainSkill("hunting", mob.boss ? 28 : 10);
 		save.kyo += Math.floor((2 + mob.level) * (mob.boss ? 6 : 1) * (1 + this.chan("kyo_find") / 100));
 		save.wins += 1;
 		const regen = this.chan("regen");
-		if (regen) save.hp = Math.min(this.maxHp(), save.hp + regen * .4);
+		if (regen && this.rules !== "hardcore") save.hp = Math.min(this.maxHp(), save.hp + regen * .4);
 		this.say(`${mob.name} falls.`);
 		this.tone(90, .08, "triangle");
 		this.questKill(mob);
@@ -1572,7 +1719,7 @@ export class TurbzGame {
 			});
 			this.receiveGear(piece);
 			this.say(`Warlord relic: ${piece.name}.`);
-			if (mob.bossId) save.bosses[mob.bossId] = (save.bosses[mob.bossId] ?? 0) + 1;
+			if (mob.bossId && !mob.dungeonBoss) save.bosses[mob.bossId] = (save.bosses[mob.bossId] ?? 0) + 1;
 		}
 		if (Math.random() < Math.min(0.8, 0.22 + mob.level * 0.012 + mob.rarity * 0.06)) this.giveItem(mob.type === "water" ? "fish" : mob.type === "earth" ? "mushroom" : "meat", 1 + (mob.level >= 20 ? 1 : 0));
 		if (Math.random() < Math.min(0.55, 0.08 + mob.level * 0.008 + mob.rarity * 0.05)) this.giveItem("cleanse_salt", 1);
@@ -1685,8 +1832,9 @@ export class TurbzGame {
 		while (save.xp >= need && save.level < 50) {
 			save.xp -= need;
 			save.level += 1;
-			save.hp = this.maxHp();
-			this.say(`Level ${save.level}.`);
+			save.skillPoints = (save.skillPoints ?? 0) + POINTS_PER_LEVEL;
+			if (this.rules !== "hardcore") save.hp = this.maxHp();
+			this.say(`Level ${save.level}. +3 skill points.`);
 			this.tone(480, .12, "square");
 			this.maybeEvilWitch();
 			need = xpNeed(save.level);
@@ -1776,7 +1924,7 @@ export class TurbzGame {
 			m.status.forEach((s) => s.t -= dt);
 			m.status = m.status.filter((s) => s.t > 0);
 			if (!m.alive) {
-				if (m.id.startsWith("shrine") || m.witch) continue;
+				if (this.save.map.startsWith("rift-") || m.id.startsWith("shrine") || m.witch) continue;
 				m.respawn -= dt;
 				if (m.respawn <= 0) {
 					const born = this.makeMob({
@@ -1847,8 +1995,12 @@ export class TurbzGame {
 	}
 	moveMob(m, dx, dy) {
 		const world = this.world;
+		const x = m.x;
+		const y = m.y;
 		if (!blocked(world, m.x + dx, m.y)) m.x += dx;
 		if (!blocked(world, m.x, m.y + dy)) m.y += dy;
+		m.direction = directionFromDelta(m.x - x, m.y - y, m.direction);
+		if (m.x !== x) m.facing = m.x < x ? -1 : 1;
 	}
 	tickWitch(m, px, py, d, dx, dy, dt) {
 		if (m.huntIn > 0) {
@@ -1887,6 +2039,7 @@ export class TurbzGame {
 		else if (form === "ranged") dmg = mitigate(dmg, this.playerArmor());
 		if (m.party) dmg *= 0.58;
 		if (m.summoner) dmg *= 0.82;
+		if (m.dungeonBoss) dmg *= .6;
 		dmg *= 1 - Math.min(.45, this.chan("ward") / 160 + this.buff.ward);
 		if (this.status.some((s) => s.id === "shell")) dmg *= .7;
 		if (Math.random() * 100 < this.chan("echo_guard")) {
@@ -1929,7 +2082,9 @@ export class TurbzGame {
 			dmg -= use;
 		}
 		if (dmg <= 0) return;
+		this.sleeping = false;
 		save.hp -= dmg;
+		if (this.rules === "hardcore") this.persist();
 		this.hurt = 1;
 		this.shake = Math.max(this.shake, 3);
 		this.float(save.x, save.y - 42, `${Math.floor(dmg)}`, "#c4473a");
@@ -1947,7 +2102,7 @@ export class TurbzGame {
 	}
 	die() {
 		const save = this.save;
-		if (this.shrine || save.map !== "world") {
+		if (this.rules !== "hardcore" && (this.shrine || save.map !== "world")) {
 			this.knockOut();
 			return;
 		}
@@ -1957,6 +2112,7 @@ export class TurbzGame {
 		this.dead = true;
 		this.dest = null;
 		publish({ panel: "rebirth" });
+		this.persist();
 		this.say("This witch is gone. Her levels and kit became Account Score. Choose the next body.");
 		this.tone(70, .3, "sawtooth");
 		this.syncHud(true);
@@ -1976,6 +2132,8 @@ export class TurbzGame {
 		this.shrine = null;
 		this.mobs = this.mobs.filter((m) => !m.id.startsWith("shrine-"));
 		if (save.map !== "world") {
+			const portal = save.dungeons?.portals.find(p => p.id === save.map);
+			if (portal) { save.x = portal.x; save.y = portal.y; }
 			const door = POIS.find((p) => p.kind === "dungeon" && p.id === save.map);
 			save.map = "world";
 			if (door && door.kind === "dungeon") {
@@ -1995,16 +2153,18 @@ export class TurbzGame {
 		this.persist();
 		this.syncHud(true);
 	}
-	rebirth(name, race, setId) {
+	rebirth(name, race: RaceId, setId, classId: ClassId = LEGACY_CLASS[race]) {
 		const save = this.save;
 		if (!save || !this.dead) return;
 		const set = setId ? SET_BY_ID[setId] : null;
 		const wear = set && set.race === race && this.isUnlocked(set.id) ? set.id : null;
 		save.name = (name || "Huntress").slice(0, 16);
 		save.race = race;
+		save.classId = classId;
 		save.level = 1;
 		save.xp = 0;
 		save.hp = 90;
+		if (this.rules === "hardcore") { save.survival = normalizeSurvival(); this.sleeping = false; }
 		save.kyo = Math.floor(save.kyo * .85);
 		save.bag = {
 			potion: 2,
@@ -2013,17 +2173,20 @@ export class TurbzGame {
 			leather: 0,
 			mushroom: 0
 		};
+		if (this.rules === "hardcore") save.bag.trail_ration = 2;
 		save.party = [];
 		save.companion = null;
 		save.spirits = [];
 		save.deathBanked = false;
-		const known = rollInnate(mulberry32(Math.random() * 1e9 | 0));
+		const known = [...CLASS_BY_ID[classId].starterMoves];
 		save.innate = known;
 		save.known = known;
 		save.bar = known;
+		save.progressionVersion = undefined;
+		normalizeAbilities(save);
 		if (wear) this.wearSet(wear);
 		else {
-			const type = RACES.find((r) => r.id === race).type;
+			const type = CLASS_BY_ID[save.classId].type;
 			const weapon = rollGear(mulberry32(Math.random() * 1e9 | 0), {
 				level: Math.max(1, save.accountLevel),
 				slot: "weapon",
@@ -2064,7 +2227,7 @@ export class TurbzGame {
 		const save = this.save;
 		const rng = mulberry32(Math.random() * 1e9 | 0);
 		const race = save.race;
-		const type = RACES.find((r) => r.id === race).type;
+		const type = CLASS_BY_ID[save.classId].type;
 		const floor = save.accountLevel >= 10 ? "fine" : "common";
 		const pieces = [
 			"head",
@@ -2111,7 +2274,7 @@ export class TurbzGame {
 	}
 	autoHarvest() {
 		const save = this.save;
-		if (!save || save.map !== "world" || this.dead || this.channel) return;
+		if (!save || save.map !== "world" || this.dead || this.channel || this.rules === "hardcore") return;
 		for (const p of POIS) {
 			if (p.kind !== "node") continue;
 			const pos = poiPos(p);
@@ -2350,6 +2513,7 @@ export class TurbzGame {
 				this.mateCd[`${key}x`] = px + (homeX - px) * Math.min(1, dt * 4);
 				this.mateCd[`${key}y`] = py + (homeY - py) * Math.min(1, dt * 4);
 			}
+			this.mateDirections[id] = directionFromDelta(this.mateCd[`${key}x`] - px, this.mateCd[`${key}y`] - py, this.mateDirections[id]);
 			this.mateCd[`${key}blink`] = Math.max(0, (this.mateCd[`${key}blink`] ?? 0) - dt);
 			if (!foe || this.mateCd[key] > 0) return;
 			const reach = dist > 70 ? 150 : 56;
@@ -2456,17 +2620,21 @@ export class TurbzGame {
 				t: 2
 			});
 		}
-		if (fx === "lanternwake" || fx === "featherfall" || fx === "gravepulse") save.hp = Math.min(this.maxHp(), save.hp + 20);
+		if (this.rules !== "hardcore" && (fx === "lanternwake" || fx === "featherfall" || fx === "gravepulse")) save.hp = Math.min(this.maxHp(), save.hp + 20);
 	}
 	interact() {
 		const save = this.save;
 		if (!save || this.dead || !this.world) return;
 		if (save.map !== "world") {
-			const ex = dungeonExit();
+			const ex = this.dungeonExitAt();
 			if (Math.hypot(save.x - ex.x, save.y - ex.y) < 36) {
-				this.travel("world", WORLD_RETURN[save.map] ?? hearthXY());
+				this.travel("world", save.dungeons?.portals.find(p => p.id === save.map) ?? WORLD_RETURN[save.map] ?? hearthXY());
 				return;
 			}
+		}
+		if (save.map === "world") {
+			const portal = save.dungeons?.portals.find(p => !p.cleared && Math.hypot(p.x - save.x, p.y - save.y) <= 120);
+			if (portal) { this.enterRift(portal.id); return; }
 		}
 		if (save.map === "world") for (const tavern of TAVERNS) {
 			const x = tavern.boardTx * 32 + 16;
@@ -2490,6 +2658,9 @@ export class TurbzGame {
 			}
 		}
 		if (!hit) {
+			const resource = this.world.spawns.find(n => n.kind === "node" && Math.hypot(n.x - save.x, n.y - save.y) <= 64);
+			if (resource) { this.startNode(resource.id, resource.node); return; }
+			if (this.rules === "hardcore" && waterWithinReach(this.world, save.x, save.y)) { this.survivalAction("water"); return; }
 			this.say("Nothing close.");
 			return;
 		}
@@ -2500,10 +2671,10 @@ export class TurbzGame {
 			else this.say("The arena waits. Find whoever keeps the door.");
 		} else if (hit.kind === "dungeon") this.travel(hit.id, dungeonExit());
 		else if (hit.kind === "hearth") {
-			save.hp = this.maxHp();
+			if (this.rules !== "hardcore") save.hp = this.maxHp();
 			this.secondUsed = false;
 			this.status = [];
-			this.say("The hearth mends you. Skills stay either way.");
+			this.say(this.rules === "hardcore" ? "The hearth offers shelter. Only healing spells mend your wounds." : "The hearth mends you. Skills stay either way.");
 			this.gainSkill("adventuring", 4);
 			this.persist();
 		} else if (hit.kind === "node") this.startNode(hit.id, hit.node);
@@ -2517,6 +2688,7 @@ export class TurbzGame {
 		}
 	}
 	startNode(id, node) {
+		if (this.channel || this.dead || !this.save) return;
 		if ((this.nodeCd[id] ?? 0) > 0) {
 			this.say("Already gathered.");
 			return;
@@ -2525,7 +2697,7 @@ export class TurbzGame {
 		const lv = this.save.skills[skill].level;
 		const need = node === "fish" ? Math.max(.45, 1.5 / (1 + (lv - 1) * .02)) : Math.max(.45, 1.15 - lv * .008);
 		this.channel = {
-			kind: `${node}:${id}`,
+			kind: `${node}:${id}`, x: this.save.x, y: this.save.y, map: this.save.map,
 			t: 0,
 			need
 		};
@@ -2536,6 +2708,11 @@ export class TurbzGame {
 		const ch = this.channel;
 		this.channel = null;
 		if (!ch) return;
+		if (ch.kind === "water") {
+			if (this.rules === "hardcore" && waterWithinReach(this.world, this.save.x, this.save.y)) { this.giveItem("raw_water", 1); this.say("Collected raw water. Purify it on a campfire."); this.persist(); }
+			return;
+		}
+		if (ch.map && (ch.map !== this.save.map || Math.hypot(ch.x - this.save.x, ch.y - this.save.y) > 64)) { this.say("Gathering stopped: too far away."); return; }
 		const [node, id] = ch.kind.split(":");
 		this.nodeCd[id ?? ""] = 12;
 		const luck = 1 + this.chan("harvest") / 100;
@@ -2602,7 +2779,7 @@ export class TurbzGame {
 			type: t,
 			round: 1
 		};
-		save.hp = this.maxHp();
+		if (this.rules !== "hardcore") save.hp = this.maxHp();
 		this.spawnShrineFoe();
 		publish({ panel: null });
 		this.say(`${TYPES[t].name} shrine. Round 1.`);
@@ -2657,7 +2834,7 @@ export class TurbzGame {
 			return;
 		}
 		this.shrine.round += 1;
-		save.hp = this.maxHp();
+		if (this.rules !== "hardcore") save.hp = this.maxHp();
 		this.say(`Round ${this.shrine.round}. The saint is louder.`);
 		this.spawnShrineFoe();
 	}
@@ -2665,6 +2842,7 @@ export class TurbzGame {
 		this.save;
 		this.room?.send({
 			t: "go",
+			dungeons: this.save.dungeons,
 			map,
 			x: at.x,
 			y: at.y
@@ -2678,7 +2856,7 @@ export class TurbzGame {
 		this.loadMap(map, true);
 		this.cam.x = save.x;
 		this.cam.y = save.y;
-		this.say(map === "world" ? "Back under the sky." : map === "crypt" ? "The Tiny Crypt breathes." : "The Ash Kiln is awake.");
+		this.say(map === "world" ? "Back under the sky." : map === "crypt" ? "The Tiny Crypt breathes." : map.startsWith("rift-") ? "A new dungeon. Its guardian waits in the final room." : "The Ash Kiln is awake.");
 		if (map === "crypt") {
 			if (!save.quests.bone_king.done && save.regions.includes("bone")) {}
 		}
@@ -2755,29 +2933,51 @@ export class TurbzGame {
 		if (!save.quests.salt_run.done) this.completeQuest("salt_run");
 		this.persist();
 	}
+	itemProblem(def) {
+		const save = this.save;
+		return itemUseProblem(def, { hardcore: this.rules === "hardcore", hp: save.hp, maxHp: this.maxHp(), hunger: save.survival?.hunger, thirst: save.survival?.thirst });
+	}
+	eatFood() {
+		if (!this.save || this.rules !== "hardcore" || this.dead) return;
+		const id = bestFood(this.save.bag, this.save.survival.hunger);
+		if (id) this.useBag(id);
+	}
 	useBag(id) {
 		const save = this.save;
 		const def = ITEM_BY_ID[id];
-		if (!def || (save.bag[id] ?? 0) <= 0) return;
+		if (!save || !def || this.dead || (save.bag[id] ?? 0) <= 0) return;
+		const issue = this.itemProblem(def);
+		if (issue) return this.say(issue);
 		if (id === "ghost_jar") return this.catchSpirit();
 		if (id === "smoke_bomb") {
 			save.bag[id] -= 1;
 			this.dest = null;
-			save.x += this.facing * -40;
-			this.say("Smoke.");
+			const retreat = this.facing * -8;
+			for (let i = 0; i < 5; i++) this.tryMove(retreat, 0);
+			this.say("Smoke."); this.persist(); this.syncHud(true);
 			return;
 		}
 		if (id === "cleanse_salt") {
 			save.bag[id] -= 1;
 			this.status = [];
-			this.say("Cleansed.");
+			this.say("Cleansed."); this.persist(); this.syncHud(true);
 			return;
 		}
-		if (def.heal) {
-			save.bag[id] -= 1;
+		if (this.rules === "hardcore") {
+			if (FOOD[id] || id === "drinking_water") {
+				save.bag[id]--;
+				if (id === "drinking_water") save.survival.thirst = Math.min(100, save.survival.thirst + 50);
+				else save.survival.hunger = Math.min(100, save.survival.hunger + FOOD[id]);
+				this.say(`Used ${def.name}.`); this.persist(); this.syncHud(true); return;
+			}
+
+		}
+		if (def.heal || def.buff) save.bag[id] -= 1;
+		if (def.heal && this.rules !== "hardcore") {
 			save.hp = Math.min(this.maxHp(), save.hp + def.heal);
 			this.say(`${def.name}.`);
 		}
+		if (def.buff) this.say(`${def.name} · 25 seconds.`);
 		if (def.buff === "fire") this.buff = {
 			type: "fire",
 			crit: 0,
@@ -2819,6 +3019,7 @@ export class TurbzGame {
 		}
 	}
 	toggleAutoplay() {
+		if (!this.save || this.dead) return;
 		this.autoplay = !this.autoplay;
 		this.path = [];
 		this.pathI = 0;
@@ -2833,12 +3034,11 @@ export class TurbzGame {
 		const i = save.gear.findIndex((g) => g.uid === uid);
 		if (i < 0) return;
 		const g = save.gear[i];
-		if (Object.values(save.equipped).includes(uid)) {
-			for (const k of Object.keys(save.equipped)) if (save.equipped[k] === uid) delete save.equipped[k];
-		}
+		if (Object.values(save.equipped).includes(uid)) return this.say("Equip a replacement before selling worn gear.");
 		const mult = (1 + Math.min(.5, (save.skills.trading.level - 1) * .01)) * (1 + this.chan("sell_boost") / 100);
 		save.kyo += Math.floor(gearPrice(g) * .45 * mult);
 		save.gear.splice(i, 1);
+		if (this.selected === uid) this.selected = null;
 		this.gainSkill("trading", 8);
 		this.say("Sold.");
 		this.persist();
@@ -2894,22 +3094,11 @@ export class TurbzGame {
 		this.syncHud(true);
 	}
 	teach() {
-		const save = this.save;
-		const piece = this.piece("weapon") ?? this.piece("chest");
-		if (!piece) return this.say("Wear a piece. New verses live in the gear.");
-		if (save.kyo < 35) return this.say("Orien wants 35 Kyo.");
-		const have = new Set(this.arsenal(save).map((m) => m.id));
-		const id = learnPool(save.level + 4, save.race).find((m) => !have.has(m));
-		if (!id) return this.say("That piece already sings every verse Orien knows.");
-		save.kyo -= 35;
-		piece.moves = [...ensureGearMoves(piece), id].slice(0, 2);
-		this.syncArsenal(save);
-		this.say(`${piece.name} learned ${MOVE_BY_ID[id].name}.`);
-		this.persist();
-		this.syncHud(true);
+		this.toggle("moves");
+		this.say("Spend character skill points to unlock or upgrade attacks and spells.");
 	}
 	setBar(_index, _moveId) {
-		this.say("Auto uses every verse on you. New ones come packed in gear.");
+		this.say("Auto uses your unlocked abilities. Upgrade them in Attacks & Spells.");
 	}
 	select(uid) {
 		this.selected = uid;
@@ -2952,6 +3141,7 @@ export class TurbzGame {
 		this.syncHud(true);
 	}
 	takeBounty() {
+		if (this.rules === "hardcore") return this.toggle("survival");
 		const save = this.save;
 		if (!save || !this.world || save.map !== "world") return;
 		const live = this.mobs.find((m) => m.witch && m.alive);
@@ -3062,7 +3252,7 @@ export class TurbzGame {
 	sellMats() {
 		const save = this.save;
 		if (!save) return;
-		const ids = [
+		const ids = this.rules === "hardcore" ? ["leather", "ore"] : [
 			"meat",
 			"leather",
 			"mushroom",
@@ -3090,15 +3280,17 @@ export class TurbzGame {
 		this.syncHud(true);
 	}
 	toggle(panel) {
-		if (snap.mode !== "play") return;
+		if (snap.mode !== "play" || this.dead) return;
 		publish({ panel: snap.panel === panel ? null : panel });
 		this.syncHud(true);
 	}
 	escape() {
+		if (this.dead) return;
 		if (snap.panel) publish({ panel: null });
 		else if (snap.mode === "play") publish({ panel: "pause" });
 	}
 	closePanel() {
+		if (this.dead) return;
 		publish({ panel: null });
 	}
 	toTitle() {
@@ -3141,6 +3333,8 @@ export class TurbzGame {
 		return save.gear.find((g) => g.uid === uid) ?? null;
 	}
 	normalize(save) {
+		if (!RACES.some((r) => r.id === save.race)) save.race = "vesper";
+		if (!Object.hasOwn(CLASS_BY_ID, save.classId)) save.classId = LEGACY_CLASS[save.race];
 		const skills = blankSkills();
 		const prev = save.skills ?? {};
 		for (const sk of SKILLS) {
@@ -3185,7 +3379,14 @@ export class TurbzGame {
 			const seed = save.seed || 1;
 			save.innate = save.known?.length ? save.known.slice(0, 4) : rollInnate(mulberry32(seed));
 		}
-		for (const g of save.gear) ensureGearMoves(g);
+		normalizeAbilities(save);
+		save.dungeons = normalizeDungeonState(save.dungeons);
+		if (this.rules === "hardcore") {
+			const fresh = !save.survival; save.survival = normalizeSurvival(save.survival);
+			if (fresh) { save.bag.trail_ration = (save.bag.trail_ration ?? 0) + 2; }
+		}
+		if (save.map.startsWith("rift-") && !save.dungeons.portals.some(p => p.id === save.map)) { save.map = "world"; Object.assign(save, hearthXY()); }
+		for (const g of save.gear) migrateEquipment(g);
 		this.syncArsenal(save);
 	}
 	gainAccount(n) {
@@ -3212,26 +3413,7 @@ export class TurbzGame {
 		this.syncHud(true);
 	}
 	playerArmor() {
-		let armor = 0;
-		for (const slot of [
-			"head",
-			"chest",
-			"legs",
-			"feet"
-		]) {
-			const g = this.piece(slot);
-			if (!g) continue;
-			const q = [
-				"worn",
-				"common",
-				"fine",
-				"rare",
-				"epic",
-				"legendary"
-			].indexOf(g.quality);
-			armor += 8 + g.level * 2 + Math.max(0, q) * 5;
-		}
-		return armor;
+		return ["head", "chest", "legs", "feet", "relic"].reduce((sum, slot) => { const g = this.piece(slot); return sum + (g ? equipmentStats(g).armor : 0); }, 0);
 	}
 	mobArmor(mob) {
 		if (mob.animal && mob.species !== "boar") return 2;
@@ -3311,7 +3493,12 @@ export class TurbzGame {
 		if (!this.save) return;
 		for (const g of this.save.gear) this.noteFound(g);
 		const key = this.rules === "hardcore" ? HC_KEY : SAVE_KEY;
-		localStorage.setItem(key, JSON.stringify(this.save));
+		const localJson = JSON.stringify(this.save);
+		if (this.rules === "hardcore") this.cloudHard = JSON.parse(localJson);
+		else this.cloudCache = JSON.parse(localJson);
+		try { localStorage.setItem(key, localJson); } catch {
+			if (!this.storageWarned) { this.storageWarned = true; this.say("Local saving is unavailable. Keep this tab open to retain your progress."); }
+		}
 		if (!this.cloudFn) return;
 		const json = JSON.stringify({ slot: this.rules === "hardcore" ? "hardcore" : "hunt", save: this.save });
 		window.clearTimeout(this.cloudTimer);
@@ -3382,6 +3569,7 @@ export class TurbzGame {
 				if (this.role === "host") {
 					this.room?.send({
 						t: "world",
+						dungeons: this.save?.dungeons,
 						seed: this.save?.seed,
 						map: this.save?.map,
 						x: this.save?.x,
@@ -3405,13 +3593,17 @@ export class TurbzGame {
 			hp: Number(msg.hp),
 			max: Number(msg.max),
 			race: msg.race || "vesper",
+			classId: Object.hasOwn(CLASS_BY_ID, msg.classId) ? msg.classId : undefined,
+			direction: ["up", "right", "down", "left"].includes(msg.direction) ? msg.direction : "down",
 			facing: Number(msg.facing) || 1,
 			map: msg.map || "world",
 			pieces: Array.isArray(msg.pieces) ? msg.pieces : []
 		});
+		else if (msg.t === "dungeons" && this.role === "guest" && save) save.dungeons = normalizeDungeonState(msg.dungeons);
 		else if (msg.t === "world" && this.role === "guest" && save) {
+			save.dungeons = normalizeDungeonState(msg.dungeons);
 			const seed = Number(msg.seed);
-			if (seed && seed !== save.seed) {
+			if (Number.isFinite(seed) && (seed !== save.seed || msg.map !== save.map)) {
 				save.seed = seed;
 				this.overworld = null;
 				this.switchTo(msg.map || "world", {
@@ -3438,10 +3630,10 @@ export class TurbzGame {
 				save?.gear && this.receiveGear(piece);
 				this.say(`Your roll: ${piece.name}.`);
 			}
-		} else if (msg.t === "go" && save) this.switchTo(msg.map, {
-			x: Number(msg.x),
-			y: Number(msg.y)
-		});
+		} else if (msg.t === "go" && save) {
+			if (msg.dungeons) save.dungeons = normalizeDungeonState(msg.dungeons);
+			this.switchTo(msg.map, { x: Number(msg.x), y: Number(msg.y) });
+		}
 		else if (msg.t === "chat") {
 			this.chat.push({
 				name: String(msg.name ?? "?"),
@@ -3489,6 +3681,8 @@ export class TurbzGame {
 			hp: save.hp,
 			max: this.maxHp(),
 			race: save.race,
+			classId: save.classId,
+			direction: this.direction,
 			facing: this.facing,
 			map: save.map,
 			pieces
@@ -3527,6 +3721,7 @@ export class TurbzGame {
 		publish({ chat: this.chat });
 	}
 	toggleTrade() {
+		if (!this.save || this.dead) return;
 		const near = this.nearestRemote();
 		if (!near) return this.say("No hunter close enough to trade.");
 		this.trade = {
@@ -3577,6 +3772,7 @@ export class TurbzGame {
 		this.syncHud(true);
 	}
 	onTrade(from, msg) {
+		if (!this.save || this.dead) return;
 		if (msg.op === "open") {
 			this.trade = {
 				peer: from,
@@ -3648,13 +3844,17 @@ export class TurbzGame {
 		if (!save) return;
 		const set = this.setInfo();
 		const q = QUESTS.find((d) => !save.quests[d.id]?.done) ?? QUESTS[QUESTS.length - 1];
-		const region = this.world && save.map === "world" ? BIOME_LABEL[biomeNameAt(this.world, save.x, save.y)] : save.map === "crypt" ? "Tiny Crypt" : "Ash Kiln";
+		const region = this.world && save.map === "world" ? BIOME_LABEL[biomeNameAt(this.world, save.x, save.y)] : save.map === "crypt" ? "Tiny Crypt" : save.map.startsWith("rift-") ? `Dungeon ${save.map.slice(5)}` : "Ash Kiln";
 		const npc = NPCS.find((n) => n.id === this.talkId);
 		publish({
 			mode: "play",
 			name: save.name,
 			race: save.race,
 			level: save.level,
+			dungeonCountdown: Math.ceil(DUNGEON_INTERVAL - (save.dungeons?.elapsed ?? 0)),
+			dungeonPortals: save.dungeons?.portals ?? [],
+			skillPoints: save.skillPoints ?? 0,
+			abilities: MOVES.map(m => ({ ...m, rank: save.abilityRanks?.[m.id] ?? 0 })),
 			xp: save.xp,
 			xpNeed: xpNeed(save.level),
 			hp: Math.max(0, Math.ceil(save.hp)),
@@ -3714,7 +3914,7 @@ export class TurbzGame {
 				id: it.id,
 				name: it.name,
 				count: save.bag[it.id] ?? 0,
-				about: it.about
+				about: it.about, useProblem: this.itemProblem(it)
 			})),
 			talk: npc ? {
 				id: npc.id,
@@ -3728,6 +3928,9 @@ export class TurbzGame {
 			companion: (save.spirits ?? []).filter((s) => s.hp > 0).map((s) => `${s.name} lv${s.level}`).join(", ") || "No spirits",
 			accountScore: save.accountScore ?? 0,
 			turn: this.duel ? (this.duel.phase === "yours" ? "Your verse" : `${this.duel.lead?.name ?? "They"} readies`) : this.turnQ[0] ? (this.turnQ[0].side === "you" ? "Your turn" : this.turnQ[0].side === "spirit" ? "Spirit" : "Enemy") : "",
+			survival: this.rules === "hardcore" ? { ...save.survival } : null,
+			nearTree: this.world.spawns.some(n => n.kind === "node" && n.node === "tree" && Math.hypot(n.x - save.x, n.y - save.y) <= 64 && !(this.nodeCd[n.id] > 0)) || POIS.some(p => p.kind === "node" && p.node === "tree" && Math.hypot(poiPos(p).x - save.x, poiPos(p).y - save.y) <= 64 && !(this.nodeCd[p.id] > 0)),
+			nearCamp: this.nearCamp(), nearWater: waterWithinReach(this.world, save.x, save.y), sleeping: !!this.sleeping,
 			rules: this.rules === "hardcore" ? "hardcore" : "hunt",
 			duel: this.duel ? {
 				phase: this.duel.phase === "yours" ? "yours" : "answer",
@@ -3765,7 +3968,7 @@ export class TurbzGame {
 				"ghost_jar",
 				"cleanse_salt",
 				"spirit_candy",
-				"smoke_bomb"
+				"smoke_bomb", ...(this.rules === "hardcore" ? ["trail_ration", "cooked_meat"] : [])
 			].map((id) => ({
 				id,
 				name: ITEM_BY_ID[id].name,
@@ -3800,8 +4003,7 @@ export class TurbzGame {
 			})),
 			bounty: (() => {
 				if (this.rules === "hardcore") {
-					const n = this.mobs.filter((m) => m.alive && m.party).length;
-					return n ? `Witch party · ${n} still standing` : "The wilds are quiet. A party will form.";
+					return "The frontier: hunt for food, gather water, and rest by a fire.";
 				}
 				const witch = this.mobs.find((m) => m.witch && m.alive);
 				if (!witch) return "";
@@ -3889,9 +4091,25 @@ export class TurbzGame {
 			}
 		}
 		else {
-			const ex = dungeonExit();
+			const ex = this.dungeonExitAt();
 			drawRift(ctx, ex.x, ex.y + 8);
 			drawShadowName(ctx, "EXIT", ex.x, ex.y - 130, "#e7d9ff");
+		}
+		if (save.map === "world") for (const portal of save.dungeons?.portals ?? []) {
+			if (portal.cleared) continue;
+			drawRift(ctx, portal.x, portal.y);
+			drawShadowName(ctx, `DUNGEON ${portal.id.slice(5)}`, portal.x, portal.y - 100, "#e7d9ff");
+		}
+		if (this.rules === "hardcore") for (const fire of save.survival.campfires) {
+			if (fire.map !== save.map) continue;
+			// Small pixel flame and crossed logs use the same pixel scale as world art.
+			ctx.fillStyle = "#68412d"; ctx.fillRect(fire.x - 12, fire.y - 4, 24, 6); ctx.fillRect(fire.x - 8, fire.y - 8, 16, 6);
+			ctx.fillStyle = "#df582a"; ctx.fillRect(fire.x - 8, fire.y - 20, 16, 14); ctx.fillRect(fire.x - 4, fire.y - 26, 8, 6);
+			ctx.fillStyle = "#ffc45b"; ctx.fillRect(fire.x - 4, fire.y - 16, 8, 10);
+			drawShadowName(ctx, "CAMP", fire.x, fire.y - 40, "#ffc45b");
+		}
+		for (const node of this.world.spawns) if (node.kind === "node" && node.node === "tree") {
+			if (Math.abs(node.x - this.cam.x) < w && Math.abs(node.y - this.cam.y) < h) drawShadowName(ctx, "LOGS", node.x, node.y - 30, "#9ad8c8");
 		}
 		for (const m of this.mobs) {
 			if (!m.alive) continue;
@@ -3903,6 +4121,7 @@ export class TurbzGame {
 					x: m.x,
 					y: m.y,
 					race: m.race,
+					direction: m.direction ?? "down",
 					female: true,
 					hair: rr.hair,
 					skin: 2,
@@ -4012,6 +4231,8 @@ export class TurbzGame {
 				x: px,
 				y: py,
 				race: "vesper",
+				npcId: npc.id,
+				direction: this.mateDirections[id] ?? "down",
 				female: npc.female,
 				hair: npc.hair,
 				skin: npc.outfit % 5,
@@ -4056,6 +4277,8 @@ export class TurbzGame {
 				x: r.x,
 				y: r.y,
 				race: r.race,
+				classId: r.classId,
+				direction: r.direction,
 				female: true,
 				hair: rr.hair,
 				skin: 0,
@@ -4081,6 +4304,9 @@ export class TurbzGame {
 			x: save.x,
 			y: save.y,
 			race: save.race,
+			classId: save.classId,
+			direction: this.direction,
+			moving: this.moving && !this.dead && snap.panel !== "pause",
 			female: true,
 			hair: race.hair,
 			skin: RACES.findIndex((r) => r.id === save.race),
@@ -4147,7 +4373,11 @@ export class TurbzGame {
 		}
 		if (id.startsWith("talk:")) this.openTalk(id.slice(5));
 		else if (id.startsWith("join:")) this.recruit(id.slice(5));
-		else if (id === "gather") this.interact();
+		else if (id.startsWith("chop:")) {
+			const node = this.world.spawns.find(n => n.id === id.slice(5) && n.kind === "node");
+			if (node && Math.hypot(node.x - this.save.x, node.y - this.save.y) <= 64) this.startNode(node.id, node.node);
+			else this.say("Move beside the tree to chop logs.");
+		} else if (id === "gather") this.interact();
 		this.clearMenu();
 	}
 	recruit(id) {
@@ -4192,7 +4422,7 @@ export class TurbzGame {
 		const step = Math.max(1, Math.round(world.w / 140));
 		for (let y = 0; y < world.h; y += step) for (let x = 0; x < world.w; x += step) {
 			const t = world.tiles[y * world.w + x];
-			ctx.fillStyle = !t ? "#111" : t.block && t.floor !== 2 ? "#1c1412" : colors[t.biome] ?? "#555";
+			ctx.fillStyle = !t ? "#111" : t.floor === 2 ? "#258bb5" : t.block ? "#1c1412" : colors[t.biome] ?? "#555";
 			ctx.fillRect(Math.floor(x * sx), Math.floor(y * sy), Math.ceil(sx * step) + 1, Math.ceil(sy * step) + 1);
 		}
 		for (const tavern of TAVERNS) {
@@ -4214,6 +4444,15 @@ export class TurbzGame {
 				ctx.textAlign = "left";
 				ctx.fillText(p.kind === "dungeon" ? p.name : p.kind === "shrine" ? "Arena" : p.name, mx + 6, my + 3);
 			}
+		}
+		for (const fire of save.survival?.campfires ?? []) {
+			if (fire.map !== "world") continue;
+			ctx.fillStyle = "#ffac45"; ctx.fillRect(fire.x / TILE * sx - 3, fire.y / TILE * sy - 3, 6, 6);
+		}
+		for (const portal of save.dungeons?.portals ?? []) {
+			if (portal.cleared) continue;
+			ctx.fillStyle = "#b4a6ff"; ctx.fillRect(portal.x / TILE * sx - 3, portal.y / TILE * sy - 3, 6, 6);
+			ctx.font = "13px VT323"; ctx.fillText(`Dungeon ${portal.id.slice(5)}`, portal.x / TILE * sx + 5, portal.y / TILE * sy);
 		}
 		if (save.map === "world") {
 			ctx.fillStyle = "#fff6e8";
@@ -4239,13 +4478,14 @@ export class TurbzGame {
 		ctx.font = "14px VT323, monospace";
 		ctx.fillStyle = "#f0e2c8";
 		ctx.textAlign = "left";
-		ctx.fillText("You  ·  gold arena  ·  violet rift  ·  red boss  ·  green node", 8, 352);
+		ctx.fillText("You · gold arena · violet rift · red boss · green node · orange camp", 8, 352);
 	}
 	hoverAt(x, y) {
 		const info = this.describeAt(x, y);
 		this.hint = info?.hint ?? "";
 	}
 	openInspect(x, y, sx, sy) {
+		if (!this.save || this.dead) return;
 		const info = x < -1e3 ? null : this.describeAt(x, y);
 		const { w, h } = this.cssSize();
 		const shell = [
@@ -4299,7 +4539,7 @@ export class TurbzGame {
 			sy: Math.max(8, Math.min(sy, h - 280)),
 			title: info?.title ?? "Menu",
 			lines: info?.lines ?? ["Bag, skills, the board, and the rest of the veil."],
-			actions: [...info?.actions ?? [], ...shell]
+			actions: [...info?.actions ?? [], ...(this.rules === "hardcore" ? [{ id: "menu:survival", label: "Survival & Camp" }] : []), ...shell]
 		};
 		this.syncHud(true);
 	}
@@ -4349,19 +4589,22 @@ export class TurbzGame {
 				actions
 			};
 		}
+		for (const node of this.world.spawns) if (node.kind === "node" && Math.hypot(node.x - x, node.y - y) < 40) return {
+			hint: "Tree · chop for logs", title: "Resource tree", lines: ["Chop logs to build a campfire, cook meals, and purify water."], actions: [{ id: `chop:${node.id}`, label: "Chop logs" }]
+		};
 		for (const p of POIS) {
 			const pos = poiPos(p);
 			if (!pos || Math.hypot(pos.x - x, pos.y - y) > 56) continue;
 			if (p.kind === "dungeon") return {
 				hint: `${p.name} · rift`,
 				title: p.name,
-				lines: ["A giant rift. Walk the lip and step through.", "Die in there and you are knocked out. Kyo bleeds. Gear stays."],
+				lines: ["A giant rift. Walk the lip and step through.", this.rules === "hardcore" ? "Hardcore death takes this body, including inside dungeons." : "Die in there and you are knocked out. Kyo bleeds. Gear stays."],
 				actions: []
 			};
 			if (p.kind === "shrine") return {
 				hint: `${p.name} · arena`,
 				title: p.name,
-				lines: ["A battle arena. Speak to the keeper at the door.", "A loss here is a knockout, not the veil."],
+				lines: ["A battle arena. Speak to the keeper at the door.", this.rules === "hardcore" ? "Hardcore death takes this body. The shrine does not heal injuries." : "A loss here is a knockout, not the veil."],
 				actions: []
 			};
 			if (p.kind === "node") return {
@@ -4382,7 +4625,7 @@ export class TurbzGame {
 		}
 		return null;
 	}
-	preview(canvas, race) {
+	preview(canvas, race, classId?: ClassId) {
 		const ctx = canvas.getContext("2d");
 		if (!ctx) return;
 		ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -4393,6 +4636,7 @@ export class TurbzGame {
 			x: canvas.width / 2,
 			y: canvas.height - 8,
 			race,
+			classId,
 			female: true,
 			hair: r.hair,
 			skin: RACES.findIndex((x) => x.id === race),
@@ -4635,6 +4879,7 @@ export class TurbzGame {
 		else if (form === "ranged") dmg = mitigate(dmg, this.playerArmor());
 		if (mob.party) dmg *= .58;
 		if (mob.summoner) dmg *= .82;
+		if (mob.dungeonBoss) dmg *= .6;
 		dmg *= 1 - Math.min(.45, this.chan("ward") / 160 + (this.buff?.ward ?? 0));
 		return Math.max(1, dmg);
 	}
@@ -4663,12 +4908,12 @@ export class TurbzGame {
 			note = "SUMMON";
 		}
 		if (kind === "guard") {
-			incoming *= .46;
+			incoming *= Math.max(.25, .46 / abilityMultiplier(save, pMove.id));
 			this.defFatigue = Math.max(0, fatigue - .35);
 			note = note === "SUMMON" ? note : "GUARD";
 		} else if (kind === "heal") {
 			incoming *= .8;
-			const heal = 14 + Math.max(8, pMove.power) * .4;
+			const heal = (14 + Math.max(8, pMove.power) * .4) * abilityMultiplier(save, pMove.id);
 			save.hp = Math.min(this.maxHp(), save.hp + heal);
 			this.float(save.x, save.y - 52, `+${Math.floor(heal)}`, "#9ad8c8");
 			note = "MEND";

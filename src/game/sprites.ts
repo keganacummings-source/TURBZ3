@@ -1,6 +1,7 @@
 import type { FxId, GhostLook, RaceId, TypeId } from "./content";
 import { TYPES } from "./content";
 import { motifOf, paintMotif, paintSetAura } from "./fx-paint";
+import { drawCreatureSprite } from "./creature-sprites";
 import { tryDrawActorSprite } from "./actor-sprites";
 
 export type Pal = { d: string; m: string; l: string; h: string; a: string };
@@ -40,6 +41,8 @@ export type ActorDraw = {
   hair: number;
   skin: number;
   facing: number;
+  direction?: "up" | "right" | "down" | "left";
+  moving?: boolean;
   walk: number;
   attack: number;
   hurt: number;
@@ -95,6 +98,7 @@ function paintFitted(ctx: CanvasRenderingContext2D, piece: WornPiece | undefined
 }
 
 export function drawActor(ctx: CanvasRenderingContext2D, a: ActorDraw): void {
+  if (tryDrawActorSprite(ctx, a)) return;
   const s = (a.scale ?? 1) * (a.tall ?? 1);
   const skin = SKIN[a.skin] ?? SKIN[0]!;
   const hair = HAIR[a.hair] ?? "#241830";
@@ -1539,163 +1543,7 @@ function drawCrow(ctx: CanvasRenderingContext2D, gait: number): void {
 }
 
 export function drawMonster(ctx: CanvasRenderingContext2D, m: MonsterDraw): void {
-  if (m.animal) {
-    drawBeast(ctx, m);
-    return;
-  }
-  const pal = typePal(m.type);
-  const sc = (m.boss ? 1.85 : 1.2) * (1 + m.rarity * 0.06);
-  if (m.ghost || m.look || m.type === "spirit" || m.template === 16 || m.template === 23) {
-    drawGhost(ctx, m, pal, sc);
-    return;
-  }
-  const sh = SHAPE[m.template % SHAPE.length]!;
-  ctx.save();
-  ctx.translate(m.x, m.y);
-  ctx.scale((m.facing < 0 ? -1 : 1) * sc, sc);
-  const bob = Math.sin(m.walk * 6) * 2;
-  ctx.translate(0, bob);
-  ctx.fillStyle = "rgba(0,0,0,0.35)";
-  ctx.beginPath();
-  ctx.ellipse(0, 3, 14, 4.5, 0, 0, Math.PI * 2);
-  ctx.fill();
-  if (sh.wings) {
-    ctx.fillStyle = pal.d;
-    ctx.globalAlpha = 0.88;
-    const flap = Math.sin(m.walk * 7) * 3;
-    ctx.beginPath();
-    ctx.ellipse(-16, -24 + flap, 14, 7, -0.7, 0, Math.PI * 2);
-    ctx.ellipse(16, -24 - flap, 14, 7, 0.7, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = pal.l;
-    ctx.globalAlpha = 0.45;
-    ctx.beginPath();
-    ctx.ellipse(-16, -24 + flap, 7, 3, -0.7, 0, Math.PI * 2);
-    ctx.ellipse(16, -24 - flap, 7, 3, 0.7, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 1;
-  }
-  if (sh.tail) {
-    ctx.strokeStyle = pal.m;
-    ctx.lineWidth = 3 + sh.tail;
-    ctx.beginPath();
-    ctx.moveTo(-8, -10);
-    ctx.quadraticCurveTo(-20, -6 - sh.tail * 4, -22, 2 + Math.sin(m.walk * 6) * 3);
-    ctx.stroke();
-    ctx.fillStyle = pal.a;
-    ctx.beginPath();
-    ctx.arc(-22, 2, 2.4, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  ctx.fillStyle = pal.m;
-  const lift = sh.legs ? 0 : -8;
-  if (sh.body === 0) {
-    ctx.beginPath();
-    ctx.ellipse(0, -18 + lift, 12, 13, 0, 0, Math.PI * 2);
-    ctx.fill();
-  } else if (sh.body === 1 || sh.body === 9) {
-    ctx.fillRect(-8, -30, 16, 20);
-    ctx.beginPath();
-    ctx.arc(0, -34, 8, 0, Math.PI * 2);
-    ctx.fill();
-  } else if (sh.body === 2) {
-    ctx.fillRect(-9, -30, 18, 20);
-    ctx.fillStyle = pal.d;
-    ctx.fillRect(-9, -30, 18, 4);
-    ctx.fillStyle = pal.m;
-  } else if (sh.body === 3) {
-    ctx.beginPath();
-    ctx.moveTo(0, -36);
-    ctx.quadraticCurveTo(12, -12, 0, -4);
-    ctx.quadraticCurveTo(-12, -12, 0, -36);
-    ctx.fill();
-  } else if (sh.body === 4) {
-    ctx.beginPath();
-    ctx.moveTo(-14, -8);
-    ctx.quadraticCurveTo(0, -32, 16, -6);
-    ctx.quadraticCurveTo(0, -2, -14, -8);
-    ctx.fill();
-  } else if (sh.body === 5) {
-    ctx.beginPath();
-    ctx.ellipse(0, -16, 16, 10, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.ellipse(10, -18, 6, 4, 0.4, 0, Math.PI * 2);
-    ctx.fill();
-  } else if (sh.body === 6) {
-    ctx.fillRect(-12, -26, 24, 18);
-    ctx.fillStyle = pal.l;
-    ctx.fillRect(-8, -22, 16, 3);
-    ctx.fillStyle = pal.m;
-  } else if (sh.body === 7) {
-    ctx.beginPath();
-    ctx.moveTo(0, -38);
-    ctx.lineTo(10, -8);
-    ctx.lineTo(-10, -8);
-    ctx.closePath();
-    ctx.fill();
-  } else if (sh.body === 8) {
-    ctx.beginPath();
-    ctx.moveTo(10, -8);
-    ctx.quadraticCurveTo(0, -16, -16, -28);
-    ctx.quadraticCurveTo(-8, -14, -4, -8);
-    ctx.fill();
-  }
-  if (sh.body === 9) {
-    ctx.strokeStyle = pal.h;
-    ctx.lineWidth = 1.4;
-    ctx.strokeRect(-7, -28, 14, 16);
-  }
-  ctx.fillStyle = pal.l;
-  ctx.globalAlpha = 0.35;
-  ctx.beginPath();
-  ctx.ellipse(-3, -20 + lift, 3, 5, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.globalAlpha = 1;
-  ctx.fillStyle = pal.d;
-  for (let i = 0; i < sh.legs; i++) {
-    const lx = -9 + (i % 4) * 6;
-    const step = Math.sin(m.walk * 8 + i) * 2;
-    ctx.fillRect(lx, -10, 3.2, 12 + step);
-    ctx.fillStyle = pal.m;
-    ctx.fillRect(lx - 1, 1 + step, 5, 2);
-    ctx.fillStyle = pal.d;
-  }
-  ctx.fillStyle = pal.l;
-  for (let i = 0; i < sh.horns; i++) {
-    ctx.beginPath();
-    ctx.moveTo(-5 + i * 6, -36);
-    ctx.quadraticCurveTo(-8 + i * 7, -48, -2 + i * 5, -52 - i * 2);
-    ctx.lineTo(-1 + i * 6, -34);
-    ctx.fill();
-  }
-  if (sh.crown) {
-    ctx.fillStyle = pal.h;
-    ctx.fillRect(-7, -46, 14, 3);
-    ctx.fillRect(-6, -52, 2.4, 7);
-    ctx.fillRect(-1, -56, 2.4, 11);
-    ctx.fillRect(4, -50, 2.4, 5);
-    if (sh.crown > 1) {
-      ctx.fillStyle = pal.a;
-      ctx.beginPath();
-      ctx.arc(0, -58, 2.2, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-  const headY =
-    sh.body === 0 ? -24 + lift : sh.body === 1 || sh.body === 9 ? -36 : sh.body === 7 ? -30 : sh.body === 4 ? -16 : sh.body === 3 ? -28 : -22;
-  ctx.fillStyle = m.hurt > 0 ? "#fff" : "#140e0c";
-  const eyes = Math.max(1, Math.min(4, sh.eyes));
-  for (let i = 0; i < eyes; i++) {
-    const col = i % 2;
-    const row = Math.floor(i / 2);
-    ctx.beginPath();
-    ctx.ellipse(-4 + col * 8, headY - row * 4, 1.7, 2.1, 0, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  ctx.fillStyle = pal.a;
-  ctx.fillRect(-1.2, headY + 6, 2.4, 2);
-  ctx.restore();
+  drawCreatureSprite(ctx, m);
 }
 
 export function drawShadowName(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, color: string): void {
