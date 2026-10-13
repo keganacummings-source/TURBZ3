@@ -1,12 +1,14 @@
 /**
  * V2 witch paperdoll — mirrors engine/character.lua:
  * body → hair → optional gown → armor (one matching set).
+ * Player is upscaled (WORLD_SCALE) so armor stays full-frame sharp — we never shrink armor relative to the body.
  */
 import type { ActorDraw } from "./sprites";
 
 const FRAME = 32;
 const BLOCK = 128;
-const WORLD_SCALE = 2.5;
+/** 4× the 32px frame → 128px tall player; armor draws at the same scale. */
+const WORLD_SCALE = 4;
 
 const WITCH_URL = "/V2Char/witch_sm.png";
 const ARMOR_URL = "/V2Char/armor_sm.png";
@@ -127,7 +129,6 @@ export function drawV2Character(ctx: CanvasRenderingContext2D, a: ActorDraw): bo
   const chest = armorPieces.find((p) => p.slot === "chest");
   const helm = armorPieces.some((p) => p.slot === "head");
 
-  // Always one matching set (from chest, else first piece)
   const setNum = chest
     ? (chest.style % 20) + 1
     : armorPieces[0]
@@ -138,8 +139,8 @@ export function drawV2Character(ctx: CanvasRenderingContext2D, a: ActorDraw): bo
   const py = Math.floor(-(FRAME - 0.5) * scale);
 
   let bob = 0;
-  if (a.attack > 0.08) bob = Math.sin(a.attack * Math.PI) * -1.2;
-  else if ((a.walk ?? 0) > 0.05) bob = Math.sin((a.time ?? 0) * 10) * 1.2;
+  if (a.attack > 0.08) bob = Math.sin(a.attack * Math.PI) * -1.2 * (scale / 2.5);
+  else if ((a.walk ?? 0) > 0.05) bob = Math.sin((a.time ?? 0) * 10) * 1.2 * (scale / 2.5);
 
   ctx.save();
   ctx.translate(a.x, a.y + bob);
@@ -156,7 +157,6 @@ export function drawV2Character(ctx: CanvasRenderingContext2D, a: ActorDraw): bo
     blitFrame(ctx, witchImg, hair * BLOCK, BLOCK, direction, frame, px, py, scale);
   }
 
-  // Soft gown only when no chest plate
   if (!chest) {
     const [ox, oy] = outfitOrigin(outfit);
     blitFrame(ctx, witchImg, ox, oy, direction, frame, px, py, scale);
