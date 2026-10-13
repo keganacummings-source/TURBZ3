@@ -1,6 +1,7 @@
 import type { FxId, GhostLook, RaceId, TypeId } from "./content";
 import { TYPES } from "./content";
 import { motifOf, paintMotif, paintSetAura } from "./fx-paint";
+import { tryDrawActorSprite } from "./actor-sprites";
 
 export type Pal = { d: string; m: string; l: string; h: string; a: string };
 
