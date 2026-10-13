@@ -39,86 +39,113 @@ export const ROW_RIGHT = 1;
 export const ROW_DOWN = 2;
 export const ROW_LEFT = 3;
 
-export type SheetId = "core" | "second" | "third";
-export type BandId = "m" | "f" | "a";
-export type SpriteSlot = { sheet: SheetId; band: BandId; index: number };
-export type CharacterSlot = {
-  sheet: SheetId;
-  index: number;
-  gendered?: boolean;
-  band?: BandId;
-};
+export const ACTOR_DIRECTION_ROWS = { up: ROW_UP, right: ROW_RIGHT, down: ROW_DOWN, left: ROW_LEFT } as const;
 
-export const ACTOR_DIRECTION_ROWS: Record<string, number> = {
-  up: ROW_UP,
-  right: ROW_RIGHT,
-  down: ROW_DOWN,
-  left: ROW_LEFT,
-};
+export type ActorDirection = keyof typeof ACTOR_DIRECTION_ROWS;
 
-function bandY(band: BandId): number {
-  return band === "f" ? BAND_BOTTOM : BAND_TOP;
+/** Keep the last facing when stopped; use actual movement after collision. */
+export function directionFromDelta(dx: number, dy: number, previous: ActorDirection = "down"): ActorDirection {
+  if (Math.hypot(dx, dy) < 0.001) return previous;
+  return Math.abs(dx) >= Math.abs(dy)
+    ? (dx < 0 ? "left" : "right")
+    : (dy < 0 ? "up" : "down");
 }
 
-function makeSpec(sheet: SheetId, band: BandId): AtlasSpec {
-  const keys: AtlasKeyEntry[] = [];
-  for (let i = 0; i < 6; i++) {
-    for (let row = 0; row < 4; row++) {
-      for (let frame = 0; frame < 3; frame++) {
-        keys.push({
-          key: `${sheet}-${band}-${i}-r${row}-f${frame}`,
-          x: ORIGIN_X + i * BLOCK_W + frame * ACTOR_FRAME_W,
-          y: bandY(band) + row * ACTOR_FRAME_H,
-          w: ACTOR_FRAME_W,
-          h: ACTOR_FRAME_H,
-        });
+export type SheetId = "core" | "second" | "third";
+export type BandId = "m" | "f" | "a" | "b";
+export type SpriteSlot = { sheet: SheetId; band: BandId; index: number };
+
+const SHEET_SRC: Record<SheetId, string> = {
+  core: "/sprites/charsets_12_m-f_complete_by_antifarea.png",
+  second: "/sprites/charsets_16x18-2.png",
+  third: "/sprites/charsets_12_3rd_sheet.png",
+};
+
+const SHEET_BANDS: Record<SheetId, BandId[]> = {
+  core: ["m", "f"],
+  second: ["m", "f"],
+  third: ["a", "b"],
+};
+
+export const SLOTS_PER_BAND = 6;
+
+export const spriteKey = (slot: SpriteSlot, row: number, frame: number): string =>
+  `${slot.sheet}|${slot.band}${slot.index}|d${row}f${frame}`;
+
+function bandY(band: BandId): number {
+  return band === "a" || band === "m" ? BAND_TOP : BAND_BOTTOM;
+}
+
+// Every frame of every character becomes its own atlas rect, so a draw call
+// never has to do arithmetic and can never mis-slice a neighbouring frame.
+function buildSpec(id: SheetId): AtlasSpec {
+  const sprites: Record<string, AtlasKeyEntry> = {};
+  for (const band of SHEET_BANDS[id]) {
+    for (let index = 0; index < SLOTS_PER_BAND; index++) {
+      for (let row = 0; row < ACTOR_ROWS; row++) {
+        for (let frame = 0; frame < ACTOR_WALK_FRAMES; frame++) {
+          sprites[spriteKey({ sheet: id, band, index }, row, frame)] = {
+            x: ORIGIN_X + index * BLOCK_W + frame * ACTOR_FRAME_W,
+            y: bandY(band) + row * ACTOR_FRAME_H,
+            w: ACTOR_FRAME_W,
+            h: ACTOR_FRAME_H,
+            chromaKey: id === "third" ? [254, 197, 197] : band === "m" ? [123, 213, 254] : [246, 139, 205],
+          };
+        }
       }
     }
   }
-  return {
-    id: `${sheet}-${band}`,
-    src: `/sprites/antifarea_${sheet === "core" ? "1" : sheet === "second" ? "2" : "3"}.png`,
-    keys,
-    chroma: ACTOR_BG,
-    chromaTol: ACTOR_TOLERANCE,
-  };
+  return { src: SHEET_SRC[id], chromaKey: ACTOR_BG, tolerance: ACTOR_TOLERANCE, sprites };
 }
 
 export const ACTOR_ATLASES: { id: SheetId; spec: AtlasSpec }[] = (
-  ["core", "second", "third"] as SheetId[]
-).flatMap((sheet) =>
-  (["m", "f"] as BandId[]).map((band) => ({
-    id: sheet,
-    spec: makeSpec(sheet, band),
-  })),
-);
+  Object.keys(SHEET_SRC) as SheetId[]
+).map((id) => ({ id, spec: buildSpec(id) }));
 
-export const RACE_SLOTS: Record<string, CharacterSlot> = {
-  vesper: { sheet: "core", index: 0, gendered: true },
-  ember: { sheet: "core", index: 1, gendered: true },
-  tide: { sheet: "core", index: 2, gendered: true },
-  moss: { sheet: "core", index: 3, gendered: true },
-  rime: { sheet: "core", index: 4, gendered: true },
-  gale: { sheet: "core", index: 5, gendered: true },
+export type CharacterSlot = {
+  sheet: SheetId;
+  index: number;
+  /** true = pick male or female band from the actor, false = fixed band */
+  gendered: boolean;
+  band?: BandId;
 };
 
+// The five playable races each get their own sheet character.
+export const RACE_SLOTS: Record<string, CharacterSlot> = {
+  vesper: { sheet: "core", index: 0, gendered: true },
+  cinder: { sheet: "core", index: 1, gendered: true },
+  tide: { sheet: "core", index: 2, gendered: true },
+  thorn: { sheet: "core", index: 4, gendered: true },
+  rime: { sheet: "second", index: 3, gendered: true },
+};
+
+// The ten playable classes use distinct characters from the sheets.
 export const CLASS_SLOTS: Record<string, CharacterSlot> = {
-  spiritbinder: { sheet: "second", index: 0, gendered: true },
-  ghoulknight: { sheet: "second", index: 1, gendered: true },
-  stormrider: { sheet: "second", index: 2, gendered: true },
-  voidwalker: { sheet: "second", index: 3, gendered: true },
-  lightbringer: { sheet: "second", index: 4, gendered: true },
+  warden: { sheet: "core", index: 0, gendered: true },
+  pyromancer: { sheet: "third", index: 0, gendered: false, band: "a" },
+  tidecaller: { sheet: "third", index: 1, gendered: false, band: "a" },
+  briarmage: { sheet: "third", index: 3, gendered: false, band: "a" },
+  frostblade: { sheet: "second", index: 3, gendered: true },
+  voidwalker: { sheet: "third", index: 5, gendered: false, band: "a" },
+  lightbringer: { sheet: "third", index: 4, gendered: false, band: "a" },
+  spiritbinder: { sheet: "core", index: 2, gendered: true },
+  ghoulknight: { sheet: "second", index: 2, gendered: true },
+  stormrider: { sheet: "third", index: 2, gendered: false, band: "a" },
 };
 
 export const NPC_SHEET: SheetId = "third";
-export const NPC_BAND: BandId = "f";
+export const NPC_BAND: BandId = "b";
 export const NPC_SLOTS_BY_ID: Record<string, number> = {
-  holt: 0,
-  lise: 1,
-  bram: 2,
-  ada: 3,
-  wren: 4,
-  keel: 5,
+  miret: 1,
+  vey: 4,
+  orien: 0,
+  holt: 2,
+  lise: 3,
+  bram: 4,
+  ada: 1,
+  brask: 4,
+  wren: 5,
+  keel: 0,
   pike: 3,
   nessa: 2,
   moss: 1,
