@@ -91,29 +91,23 @@ export function applyHardcorePatch(game: any): void {
     };
   }
 
+  const ensureWeaponSkills = () => {
+    const save = game.save;
+    if (save?.skills) {
+      for (const id of [
+        "w_blade", "w_bow", "w_crossbow", "w_axe", "w_staff", "w_tome",
+        "w_sling", "w_claw", "w_spear", "w_mace", "w_dagger", "w_shield",
+      ]) {
+        if (!save.skills[id]) save.skills[id] = { level: 1, xp: 0 };
+      }
+    }
+  };
+
   const origBegin = game.begin?.bind(game);
   if (origBegin) {
     game.begin = function begin(...args: any[]) {
       const r = origBegin(...args);
-      const save = this.save;
-      if (save?.skills) {
-        for (const id of [
-          "w_blade",
-          "w_bow",
-          "w_crossbow",
-          "w_axe",
-          "w_staff",
-          "w_tome",
-          "w_sling",
-          "w_claw",
-          "w_spear",
-          "w_mace",
-          "w_dagger",
-          "w_shield",
-        ]) {
-          if (!save.skills[id]) save.skills[id] = { level: 1, xp: 0 };
-        }
-      }
+      ensureWeaponSkills();
       return r;
     };
   }
@@ -122,25 +116,7 @@ export function applyHardcorePatch(game: any): void {
   if (origContinue) {
     game.continueGame = function continueGame(...args: any[]) {
       const r = origContinue(...args);
-      const save = this.save;
-      if (save?.skills) {
-        for (const id of [
-          "w_blade",
-          "w_bow",
-          "w_crossbow",
-          "w_axe",
-          "w_staff",
-          "w_tome",
-          "w_sling",
-          "w_claw",
-          "w_spear",
-          "w_mace",
-          "w_dagger",
-          "w_shield",
-        ]) {
-          if (!save.skills[id]) save.skills[id] = { level: 1, xp: 0 };
-        }
-      }
+      ensureWeaponSkills();
       return r;
     };
   }
