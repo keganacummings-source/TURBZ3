@@ -12,6 +12,7 @@ import {
   gripFor,
   loadCharacterPack,
   packReady,
+  type PackItem,
 } from "./character-pack";
 import type { Gear } from "./content";
 
@@ -43,6 +44,95 @@ export function ensureCharacterPack(): void {
   void loadCharacterPack();
 }
 
+function liveEquippedPackGear(): Gear[] {
+  try {
+    const g = (window as unknown as { __turbz?: { piece?: (s: string) => Gear | null } }).__turbz;
+    if (!g?.piece) return [];
+    return (["weapon", "head", "chest", "legs", "feet", "relic"] as const)
+      .map((s) => g.piece!(s))
+      .filter((x): x is Gear => !!x && !!(x as Gear & { packPath?: string }).packPath);
+  } catch {
+    return [];
+  }
+}
+
+function pieceStyleSeed(a: ActorDraw): number {
+  const p = a.pieces?.[0];
+  return (p?.style ?? 0) + (p?.fxSeed ?? 0) * 7 + (a.skin ?? 0) * 13;
+}
+
+function pickItem(slot: string, seed: number): PackItem | null {
+  const pack = getCharacterPack();
+  if (!pack) return null;
+  const pool = pack.items.filter((i) => i.slot === slot);
+  if (!pool.length) return null;
+  return pool[Math.abs(seed) % pool.length]!;
+}
+
+/** Build visual gear list from packGear, pieces.packPath, or catalog defaults. */
+function resolveVisualGear(a: ActorDraw, optsGear?: Gear[]): Array<{
+  slot: string;
+  packPath: string;
+  packKind: string;
+  packSlot: string;
+}> {
+  const out: Array<{ slot: string; packPath: string; packKind: string; packSlot: string }> = [];
+  const seen = new Set<string>();
+
+  const push = (slot: string, path: string, kind: string, packSlot: string) => {
+    const key = packSlot || slot;
+    if (!path || seen.has(key)) return;
+    seen.add(key);
+    out.push({ slot, packPath: path, packKind: kind, packSlot: packSlot || slot });
+  };
+
+  const list = [
+    ...(optsGear ?? []),
+    ...((a as ActorDraw & { packGear?: Gear[] }).packGear ?? []),
+    ...liveEquippedPackGear(),
+  ];
+  for (const g of list) {
+    const pg = asPackGear(g);
+    if (pg?.packPath) {
+      push(g.slot, pg.packPath, pg.packKind ?? "blade", pg.packSlot ?? g.slot);
+    }
+  }
+
+  for (const p of a.pieces ?? []) {
+    if ((p as { packPath?: string }).packPath) {
+      const path = (p as { packPath?: string }).packPath!;
+      const kind = (p as { packKind?: string }).packKind ?? p.slot;
+      const ps = (p as { packSlot?: string }).packSlot ?? p.slot;
+      push(p.slot, path, kind, ps);
+    }
+  }
+
+  // Defaults so the hunter is never nude once the pack is loaded
+  const seed = pieceStyleSeed(a);
+  if (!out.some((x) => x.packSlot === "chest" || x.slot === "chest")) {
+    const it = pickItem("chest", seed + 1);
+    if (it) push("chest", it.path, it.kind, "chest");
+  }
+  if (!out.some((x) => x.packSlot === "head" || x.slot === "head")) {
+    const it = pickItem("head", seed + 2);
+    if (it) push("head", it.path, it.kind, "head");
+  }
+  if (!out.some((x) => x.packSlot === "feet" || x.slot === "feet")) {
+    const it = pickItem("feet", seed + 3);
+    if (it) push("feet", it.path, it.kind, "feet");
+  }
+  if (!out.some((x) => x.packSlot === "weapon" || x.slot === "weapon")) {
+    const it = pickItem("weapon", seed + 4);
+    if (it) push("weapon", it.path, it.kind, "weapon");
+  }
+  if (!out.some((x) => x.packSlot === "shield") && seed % 5 === 0) {
+    const it = pickItem("shield", seed + 5);
+    if (it) push("relic", it.path, it.kind, "shield");
+  }
+
+  return out;
+}
+
 export function drawCharacterSprite(
   ctx: CanvasRenderingContext2D,
   a: ActorDraw,
@@ -54,13 +144,16 @@ export function drawCharacterSprite(
   },
 ): boolean {
   const pack = getCharacterPack();
-  if (!pack || !packReady()) {
+  if (!pack) {
     ensureCharacterPack();
     return false;
   }
 
   const body = charImage(pack.base.body);
-  if (!body.complete || body.naturalWidth <= 0) return false;
+  if (!body.complete && body.naturalWidth <= 0) {
+    ensureCharacterPack();
+    if (!packReady() && body.naturalWidth <= 0) return false;
+  }
 
   const moving = opts?.moving ?? a.walk > 0.08;
   const running = opts?.running ?? false;
@@ -104,21 +197,18 @@ export function drawCharacterSprite(
 
   ctx.imageSmoothingEnabled = false;
 
-  const gearList = opts?.gear ?? (a as ActorDraw & { packGear?: Gear[] }).packGear ?? [];
-  const packPieces = gearList.map((g) => asPackGear(g)).filter(Boolean) as NonNullable<
-    ReturnType<typeof asPackGear>
-  >[];
+  const visuals = resolveVisualGear(a, opts?.gear);
 
-  const shield = packPieces.find((g) => g.packSlot === "shield");
-  const weapon = packPieces.find((g) => g.packSlot === "weapon" || g.slot === "weapon");
-  const chest = packPieces.find((g) => g.packSlot === "chest" || g.slot === "chest");
-  const head = packPieces.find((g) => g.packSlot === "head" || g.slot === "head");
-  const feet = packPieces.find((g) => g.packSlot === "feet" || g.slot === "feet");
-  const hands = packPieces.find((g) => g.packSlot === "hands");
-  const back = packPieces.find((g) => g.packSlot === "back");
+  const shield = visuals.find((g) => g.packSlot === "shield");
+  const weapon = visuals.find((g) => g.packSlot === "weapon" || g.slot === "weapon");
+  const chest = visuals.find((g) => g.packSlot === "chest" || g.slot === "chest");
+  const head = visuals.find((g) => g.packSlot === "head" || g.slot === "head");
+  const feet = visuals.find((g) => g.packSlot === "feet" || g.slot === "feet");
+  const hands = visuals.find((g) => g.packSlot === "hands");
+  const back = visuals.find((g) => g.packSlot === "back");
 
   if (back?.packPath) drawLayer(ctx, back.packPath, 0, -14, sc, 0);
-  if (shield) drawHeld(ctx, shield.packPath!, shield.packKind ?? "shield", anim, sc);
+  if (shield) drawHeld(ctx, shield.packPath, shield.packKind || "shield", anim, sc);
 
   drawLayer(ctx, pack.base.body, 0, -16, sc, 0);
 
@@ -130,7 +220,7 @@ export function drawCharacterSprite(
   const hairVis = pack.visuals.find((v) => v.kind === "hair");
   if (hairVis && a.female && !head) drawLayer(ctx, hairVis.path, 0, -22, sc, 0);
 
-  if (weapon) drawHeld(ctx, weapon.packPath!, weapon.packKind ?? "blade", anim, sc);
+  if (weapon) drawHeld(ctx, weapon.packPath, weapon.packKind || "blade", anim, sc);
 
   if (a.hurt > 0) {
     ctx.globalAlpha = a.hurt * 0.5;
@@ -194,6 +284,5 @@ function drawHeld(
 
 export function shouldUseCharacterSprite(a: ActorDraw & { usePack?: boolean }): boolean {
   if (a.ghost) return false;
-  // Female player body uses CharacterPack whenever sprites.ts routes through drawCharacterSprite.
   return a.female !== false && a.usePack !== false;
 }
