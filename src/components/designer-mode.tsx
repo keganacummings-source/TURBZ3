@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { MapBuilder } from "./map-builder";
-import { WeaponDesigner } from "./weapon-designer";
+import { EntityDesigner } from "./entity-designer";
+
 export function DesignerMode({ onBack }: { onBack: () => void }) {
-  const [tool, setTool] = useState<"map" | "weapon" | null>(null);
+  const [tool, setTool] = useState<"map" | "entity" | null>(null);
   if (tool === "map") return <MapBuilder onBack={() => setTool(null)} />;
-  if (tool === "weapon") return <WeaponDesigner onBack={() => setTool(null)} />;
+  if (tool === "entity") return <EntityDesigner onBack={() => setTool(null)} />;
   return (
     <div className="designer-screen">
       <header className="designer-header">
@@ -22,16 +23,21 @@ export function DesignerMode({ onBack }: { onBack: () => void }) {
           <p>Build Bossrooms, Dungeons, and full Worlds with the supplied tile collection.</p>
           <p className="text-dim">Paint terrain · collision · spawns · save · import / export</p>
         </button>
-        <button className="px-panel designer-tool" onClick={() => setTool("weapon")}>
-          <span className="font-display text-kyo">Weapon Designer</span>
-          <p>Create pixel weapon art and choose combat stats.</p>
+        <button className="px-panel designer-tool" onClick={() => setTool("entity")}>
+          <span className="font-display text-kyo">Entity & Object Designer</span>
+          <p>
+            Create enemies (with ghost variants), player models, NPCs, campfires, trees, fishing
+            spots, mining spots, boards, weapons, and custom interactables.
+          </p>
           <p className="text-dim">
-            Pixel editor · element · damage · speed · range · import / export
+            Pixel sprites · combat stats · actions (Chop log, Take fish, Make Food…) · designer notes
+            · import / export
           </p>
         </button>
       </div>
       <p className="designer-status">
-        Designs are saved on this device. Export JSON files for future game updates.
+        Designs are saved on this device. Export JSON files for future game updates or Map Builder
+        placement.
       </p>
     </div>
   );
