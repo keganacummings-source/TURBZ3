@@ -1,38 +1,98 @@
 /**
- * Gear overhaul runtime patch:
- * - CharacterPack drops preferred over old racial sets
- * - Type rolls on first pickup (armor 1 type, weapons up to 4)
- * - Hold right-click to shield (blocks attacks)
+ * Gear overhaul: CharacterPack gear, type-on-pickup, RMB shield, visual outfit.
  */
 import { rollGear, mulberry32, type Gear } from "./content";
 import { awakenGearType } from "./gear-types";
-import { rollPackGear } from "./character-pack";
+import {
+  loadCharacterPack,
+  rollPackGear,
+  getCharacterPack,
+  gearFromPackItem,
+} from "./character-pack";
+
+function outfitSaveWithPack(game: any, save: any): void {
+  if (!save) return;
+  const pack = getCharacterPack();
+  if (!pack) return;
+
+  const rng = mulberry32((((save.seed ?? 1) * 997) + ((save.level ?? 1) * 13)) >>> 0);
+  const lvl = Math.max(1, save.level ?? 1);
+  const equipped = save.equipped ?? (save.equipped = {});
+  const gear: Gear[] = Array.isArray(save.gear) ? save.gear : (save.gear = []);
+
+  const hasPack = (slot: string) => {
+    const uid = equipped[slot];
+    if (!uid) return false;
+    const g = gear.find((x: any) => x.uid === uid);
+    return !!(g && (g as any).packPath);
+  };
+
+  const addFromSlot = (packSlot: string, gearSlot: string) => {
+    if (hasPack(gearSlot)) return;
+    const pool = pack.items.filter((i) => i.slot === packSlot);
+    if (!pool.length) return;
+    const item = pool[Math.floor(rng() * pool.length)]!;
+    const qRoll = rng();
+    const quality =
+      qRoll > 0.97 ? "legendary" : qRoll > 0.9 ? "epic" : qRoll > 0.75 ? "rare" : qRoll > 0.45 ? "fine" : "common";
+    const piece = gearFromPackItem(item, lvl, quality as any);
+    if (!piece) return;
+    (piece as any).slot = gearSlot;
+    (piece as any).typeless = true;
+    gear.push(piece);
+    equipped[gearSlot] = piece.uid;
+  };
+
+  addFromSlot("weapon", "weapon");
+  addFromSlot("chest", "chest");
+  addFromSlot("head", "head");
+  addFromSlot("feet", "feet");
+  addFromSlot("shield", "relic");
+}
 
 export function applyGearPatch(game: any): void {
   if (!game || game.__gearPatched) return;
   game.__gearPatched = true;
   game.shielding = false;
 
+  void loadCharacterPack().then(() => {
+    if (game.save) {
+      outfitSaveWithPack(game, game.save);
+      game.syncHud?.(true);
+    }
+  });
+
   const origReceive = game.receiveGear?.bind(game);
   if (origReceive) {
     game.receiveGear = function receiveGear(g: Gear) {
-      // If this is old-set gear without packPath, try swap to pack equivalent on the fly for armor slots
-      if (g && !(g as any).packPath && g.slot !== "weapon" && Math.random() < 0.85) {
-        const pack = rollPackGear(Math.random, g.level || 1, "armor");
-        if (pack) {
-          pack.level = g.level;
-          pack.quality = g.quality;
-          g = pack;
+      if (g && !(g as any).packPath && g.slot !== "weapon" && Math.random() < 0.9) {
+        const packPiece = rollPackGear(Math.random, g.level || 1, "armor");
+        if (packPiece) {
+          packPiece.level = g.level;
+          packPiece.quality = g.quality;
+          g = packPiece;
         }
       }
-      if (g && ((g as any).typeless || (g as any).type === "typeless" || !(g as any).types)) {
-        if ((g as any).typeless || (g as any).type === "typeless") {
-          awakenGearType(g, Math.random);
-          const types = (g as any).types?.length ? (g as any).types.join("/") : String(g.type);
-          this.say?.(`Awakened ${g.name} · ${types}.`);
-        }
+      if (g && ((g as any).typeless || (g as any).type === "typeless")) {
+        awakenGearType(g, Math.random);
+        const types = (g as any).types?.length ? (g as any).types.join("/") : String(g.type);
+        this.say?.(`Awakened ${g.name} · ${types}.`);
       }
       return origReceive(g);
+    };
+  }
+
+  for (const fnName of ["begin", "continueGame", "wearSet"] as const) {
+    const orig = game[fnName]?.bind(game);
+    if (!orig) continue;
+    game[fnName] = function (...args: any[]) {
+      const ret = orig(...args);
+      void loadCharacterPack().then(() => {
+        outfitSaveWithPack(this, this.save);
+        this.syncHud?.(true);
+        this.persist?.();
+      });
+      return ret;
     };
   }
 
@@ -43,12 +103,10 @@ export function applyGearPatch(game: any): void {
       const before = save?.gear?.length ?? 0;
       origKill(mob);
       const after = save?.gear?.length ?? 0;
-      // Ensure CharacterPack pieces flow: if nothing dropped, roll pack; if old gear dropped, often add a pack piece too on boss
       if (save) {
         const lvl = Math.max(1, mob?.level ?? 1);
         if (after === before) {
-          const chance = mob?.boss ? 1 : 0.22;
-          if (Math.random() < chance) {
+          if (Math.random() < (mob?.boss ? 1 : 0.28)) {
             const piece = rollPackGear(Math.random, lvl, Math.random() < 0.4 ? "weapon" : "armor");
             if (piece) this.receiveGear?.(piece);
           }
