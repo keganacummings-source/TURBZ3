@@ -2,12 +2,13 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import { authClient } from "@/lib/auth/client";
 import { UserButton } from "@/lib/auth/gates";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
-import { CLASSES, CLASS_RACE, RACES, TYPES, equipmentStats, type ClassId, type RaceId, type TypeId } from "@/game/content";
+import { CLASSES, CLASS_RACE, ITEM_BY_ID, RACES, TYPES, equipmentStats, type ClassId, type RaceId, type TypeId } from "@/game/content";
 import { loadCloudSave, writeCloudSave } from "@/game/cloud-client";
 import { bindCloud, cloudReady, ingestCloud, noteArena, noteHardcore, noteHunt, readArenaLocal } from "@/game/account-save";
 import { postGrave } from "@/game/social-client";
 import type { GraveBody } from "@/game/social-types";
 import { bestFood } from "@/game/item-use";
+import { CAMP_RECIPE_LIST } from "@/game/survival";
 import { DesignerMode } from "@/components/designer-mode";
 import { ArenaScreen } from "@/components/arena-ui";
 import { Boards, ChatDock, DuelBanner, Hub, Options } from "@/components/hub-ui";
@@ -932,11 +933,17 @@ function Survival({ snap, game }: { snap: ReturnType<typeof getSnap>; game: Turb
     <p>Injuries persist until a healing spell is used. Meals, sleep, potions, level-ups and hearths do not heal.</p>
     <button className="px-btn" disabled={!snap.nearTree} onClick={() => game?.survivalAction('chop')}>Chop nearby tree → Logs</button>
     <button className="px-btn" disabled={!snap.nearWater} onClick={() => game?.survivalAction('water')}>Harvest water · Stand by a water tile</button>
+    <button className="px-btn" disabled={!snap.nearWater} onClick={() => game?.startFishing()}>Fish · Stand by any water tile</button>
     <button className="px-btn" disabled={snap.nearCamp || count('timber') < 3} onClick={() => game?.survivalAction('fire')}>Build campfire · 3 logs</button>
     <p className="text-kyo">{snap.nearCamp ? 'Campfire within reach' : 'Stand beside a campfire to cook, purify, or sleep'}</p>
-    <button className="px-btn" disabled={!snap.nearCamp || count('meat') < 1 || count('timber') < 1} onClick={() => game?.survivalAction('cook')}>Cook · 1 raw meat + 1 log</button>
-    <button className="px-btn" disabled={!snap.nearCamp || count('fish') < 1 || count('timber') < 1} onClick={() => game?.survivalAction('fish')}>Cook fish · 1 raw fish + 1 log</button>
-    <button className="px-btn" disabled={!snap.nearCamp || count('raw_water') < 1 || count('timber') < 1} onClick={() => game?.survivalAction('purify')}>Purify · 1 raw water + 1 log</button>
+    <p className="text-kyo">Campfire Crafting</p>
+    {CAMP_RECIPE_LIST.map(r => {
+      const have = Object.entries(r.costs).every(([id, n]) => count(id) >= n);
+      const name = (id: string) => ITEM_BY_ID[id]?.name ?? id;
+      const costs = Object.entries(r.costs).map(([id, n]) => `${n} ${name(id)} (${count(id)})`).join(' + ');
+      const outputs = Object.entries(r.outputs).map(([id, n]) => `${name(id)} x${n}`).join(', ');
+      return <button key={r.id} className="px-btn" title={r.about} disabled={!snap.nearCamp || !have} onClick={() => game?.survivalAction(r.id)}>{r.name} · {costs} → {outputs}</button>;
+    })}
     <button className="px-btn" disabled={!snap.nearCamp} onClick={() => game?.survivalAction('sleep')}>{snap.sleeping ? 'Wake up' : 'Sleep · About 13 seconds for a full rest'}</button>
     <p className="text-dim">Use meals and drinking water from Bag. Holt sells rations and cooked meat. Hunt animals for raw meat. Look for LOGS markers, including the grove beside the hearth.</p>
     <button className="px-btn" onClick={() => game?.toggle('bag')}>Open Bag · Eat / Drink</button>

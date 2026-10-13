@@ -868,6 +868,31 @@ export type Poi =
   | { kind: "node"; id: string; node: "ore" | "tree" | "shroom" | "fish"; tx: number; ty: number }
   | { kind: "hearth"; tx: number; ty: number };
 
+/**
+ * Starting positions for resource nodes (design-grid coordinates, scaled like every other POI).
+ * These are no longer POIs: they are copied into `world.spawns` when the world is built so
+ * they can be destroyed when harvested and respawned somewhere else. Fishing has no nodes at all:
+ * every water tile is a fishing spot.
+ */
+export const NODE_STARTS: { id: string; node: "ore" | "tree" | "shroom"; tx: number; ty: number }[] = [
+  { id: "ore1", node: "ore", tx: 24, ty: 36 },
+  { id: "ore2", node: "ore", tx: 48, ty: 22 },
+  { id: "ore3", node: "ore", tx: 12, ty: 18 },
+  { id: "tree1", node: "tree", tx: 38, ty: 18 },
+  { id: "tree2", node: "tree", tx: 46, ty: 12 },
+  { id: "tree3", node: "tree", tx: 20, ty: 46 },
+  { id: "sh1", node: "shroom", tx: 36, ty: 12 },
+  { id: "sh2", node: "shroom", tx: 50, ty: 20 },
+  { id: "sh3", node: "shroom", tx: 14, ty: 48 },
+];
+
+/** Seconds after a node is harvested before a replacement appears somewhere else. */
+export const NODE_RESPAWN_SECONDS: Record<"ore" | "tree" | "shroom", number> = { tree: 15, ore: 25, shroom: 20 };
+
+/** Fishing: seconds until a bite with no fishing perks (random in this range). */
+export const FISH_BITE_MIN = 1;
+export const FISH_BITE_MAX = 10;
+
 export const POIS: Poi[] = [
   ...NPCS.map((n) => ({ kind: "npc" as const, id: n.id })),
   { kind: "shrine", id: "sh_light", type: "light", tx: 28, ty: 25, name: "Chancel Shrine" },
@@ -881,18 +906,6 @@ export const POIS: Poi[] = [
   { kind: "boss", id: "void_cantor", name: "Void Cantor", type: "void", template: 19, tx: 10, ty: 8, level: 16 },
   { kind: "boss", id: "marrow_saint", name: "Marrow Saint", type: "light", template: 24, tx: 58, ty: 8, level: 15 },
   { kind: "hearth", tx: 30, ty: 33 },
-  { kind: "node", id: "ore1", node: "ore", tx: 24, ty: 36 },
-  { kind: "node", id: "ore2", node: "ore", tx: 48, ty: 22 },
-  { kind: "node", id: "ore3", node: "ore", tx: 12, ty: 18 },
-  { kind: "node", id: "tree1", node: "tree", tx: 38, ty: 18 },
-  { kind: "node", id: "tree2", node: "tree", tx: 46, ty: 12 },
-  { kind: "node", id: "tree3", node: "tree", tx: 20, ty: 46 },
-  { kind: "node", id: "sh1", node: "shroom", tx: 36, ty: 12 },
-  { kind: "node", id: "sh2", node: "shroom", tx: 50, ty: 20 },
-  { kind: "node", id: "sh3", node: "shroom", tx: 14, ty: 48 },
-  { kind: "node", id: "fish1", node: "fish", tx: 60, ty: 24 },
-  { kind: "node", id: "fish2", node: "fish", tx: 76, ty: 34 },
-  { kind: "node", id: "fish3", node: "fish", tx: 66, ty: 40 },
 ];
 
 export const STARTER_MOVES: Record<RaceId, string[]> = {

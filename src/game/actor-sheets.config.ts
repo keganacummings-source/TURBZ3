@@ -32,7 +32,8 @@ const BAND_BOTTOM = 306;
 
 export const ACTOR_BG: [number, number, number] = [239, 208, 116];
 export const ACTOR_TOLERANCE = 0;
-export const ACTOR_SPRITE_SCALE = 3.4;
+/** Characters are drawn 2x: a 16px frame becomes exactly one 32px tile wide, so they fit 1x1 hallways. */
+export const ACTOR_SPRITE_SCALE = 2;
 
 export const ROW_UP = 0;
 export const ROW_RIGHT = 1;

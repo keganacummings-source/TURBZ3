@@ -1458,11 +1458,11 @@ export class WitchArena {
           setFx: null,
           setOn: false,
           time: this.clock,
-          scale: f.role === "summoner" ? 1.02 : 1,
+          scale: 1,
         });
       }
       const bar = f.role === "spirit" ? 28 : 46;
-      const by = f.y - (f.role === "spirit" ? 48 : 62);
+      const by = f.y - (f.role === "spirit" ? 36 : 44);
       ctx.fillStyle = "#1a1214";
       ctx.fillRect(f.x - bar / 2 - 1, by - 1, bar + 2, 6);
       ctx.fillStyle = f.side === 0 ? "#e6c15a" : "#c4473a";

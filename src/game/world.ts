@@ -4,6 +4,7 @@ import {
   ANIMAL_BY_ID,
   BIOME_MONSTERS,
   MONSTER_BY_ID,
+  NODE_STARTS,
   NPCS,
   POIS,
   TILE,
@@ -24,6 +25,8 @@ export type Spawn = {
   kind: "mob" | "node";
   species?: string;
   node?: "ore" | "tree" | "shroom" | "fish";
+  /** Picked up automatically when the player walks next to it (outside Hardcore). */
+  auto?: boolean;
   x: number;
   y: number;
   level: number;
@@ -199,19 +202,28 @@ export function buildWorld(seed: number, hardcore = false): WorldData {
     const t = tiles[idx(x, y, w)]!;
     if (!reached[idx(x, y, w)] || t.block || t.floor === 3 || t.floor === 9 || t.floor === 2) continue;
     if (terrain(x, y) < .4) continue;
-    t.decor = 1;
+    t.decor = 0; // node trees are drawn live so they can be cut down
     spawns.push({ id: `tree-${x}-${y}`, kind: "node", node: "tree", x: x * TILE + 16, y: y * TILE + 16, level: 1 });
   }
   for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
     const t = tiles[idx(home.tx + dx, home.ty + dy, w)]!;
     t.block = 0; t.floor = 9; t.decor = 0;
   }
-  const grove = tiles[idx(home.tx + 2, home.ty + 1, w)]!; grove.decor = 1;
+  tiles[idx(home.tx + 2, home.ty + 1, w)]!.decor = 0;
   spawns.push({ id: "starter-tree", kind: "node", node: "tree", x: (home.tx + 2) * TILE + 16, y: (home.ty + 1) * TILE + 16, level: 1 });
   // Small protected well pond within walking distance of the hearth.
   for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
     const t = tiles[idx(home.tx - 6 + dx, home.ty + 5 + dy, w)]!;
     t.floor = 2; t.block = 1; t.decor = 0;
+  }
+  // Fixed starting ore, tree and mushroom nodes. They live in `spawns` like every other node so
+  // harvesting removes them and the engine respawns them elsewhere.
+  for (const n of NODE_STARTS) {
+    const at = scaleTile(n.tx, n.ty);
+    const open = nearestOpenTile(tiles, w, h, at.tx, at.ty);
+    if (!open) continue;
+    tiles[open.ty * w + open.tx]!.decor = 0;
+    spawns.push({ id: n.id, kind: "node", node: n.node, auto: true, x: open.tx * TILE + 16, y: open.ty * TILE + 16, level: 1 });
   }
   const ground = ["grass_0_new.png", "ice_0_new.png", "grass_0_new.png", "dirt_full_new.png", "limestone_0.png", "sand_1.png", "volcanic_floor_0.png"];
   for (const t of tiles) {
@@ -555,11 +567,6 @@ export function paintWorld(world: WorldData): HTMLCanvasElement {
     }
   }
   for (const p of POIS) {
-    if (p.kind !== "node" || p.node !== "tree") continue;
-    const at = scaleTile(p.tx, p.ty);
-    paintTree(g, at.tx * TILE + 16, at.ty * TILE + 26);
-  }
-  for (const p of POIS) {
     if (p.kind !== "shrine" && p.kind !== "dungeon") continue;
     const at = scaleTile(p.tx, p.ty);
     const x = at.tx * TILE + 16;
@@ -703,12 +710,6 @@ function paintWorldSlice(
     }
   }
   for (const p of POIS) {
-    if (p.kind !== "node" || p.node !== "tree") continue;
-    const at = scaleTile(p.tx, p.ty);
-    if (at.tx < x0 || at.tx > x1 || at.ty < y0 || at.ty > y1) continue;
-    paintTree(ctx, at.tx * TILE + 16, at.ty * TILE + 26);
-  }
-  for (const p of POIS) {
     if (p.kind !== "shrine" && p.kind !== "dungeon") continue;
     const at = scaleTile(p.tx, p.ty);
     if (at.tx < x0 - 2 || at.tx > x1 + 2 || at.ty < y0 - 2 || at.ty > y1 + 2) continue;
@@ -717,6 +718,110 @@ function paintWorldSlice(
     if (p.kind === "shrine") paintArena(ctx, x, y);
     else paintRift(ctx, x, y);
   }
+}
+
+/** Nearest walkable, non-water tile to (tx, ty), searching outward in rings. */
+function nearestOpenTile(tiles: Tile[], w: number, h: number, tx: number, ty: number): { tx: number; ty: number } | null {
+  const ok = (x: number, y: number) => {
+    if (x <= 2 || y <= 2 || x >= w - 3 || y >= h - 3) return false;
+    const t = tiles[y * w + x]!;
+    return t.floor !== 1 && t.floor !== 2 && t.block !== 1;
+  };
+  if (ok(tx, ty)) return { tx, ty };
+  for (let r = 1; r <= 10; r++) {
+    for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+      if (ok(tx + dx, ty + dy)) return { tx: tx + dx, ty: ty + dy };
+    }
+  }
+  return null;
+}
+
+/** Tiles the player can walk to from (x, y), by flood fill. Used so respawned nodes are never stranded. */
+export function reachableFrom(world: WorldData, x: number, y: number): Uint8Array {
+  const seen = new Uint8Array(world.w * world.h);
+  const sx = Math.floor(x / TILE), sy = Math.floor(y / TILE);
+  if (sx < 0 || sy < 0 || sx >= world.w || sy >= world.h) return seen;
+  const stack: number[] = [sy * world.w + sx];
+  seen[stack[0]!] = 1;
+  while (stack.length) {
+    const i = stack.pop()!;
+    const cx = i % world.w, cy = (i / world.w) | 0;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      const nx = cx + dx, ny = cy + dy;
+      if (nx < 0 || ny < 0 || nx >= world.w || ny >= world.h) continue;
+      const ni = ny * world.w + nx;
+      if (seen[ni] || blocked(world, nx * TILE + 16, ny * TILE + 16)) continue;
+      seen[ni] = 1;
+      stack.push(ni);
+    }
+  }
+  return seen;
+}
+
+/**
+ * Pick a spot for a respawned resource node: walkable, reachable, off roads/settlements,
+ * clear of other nodes and scenery, and well away from the player so it really is "elsewhere".
+ */
+export function pickNodeSpot(
+  world: WorldData,
+  reach: Uint8Array,
+  from: { x: number; y: number },
+  minDist = 320,
+  rng: () => number = Math.random,
+): { x: number; y: number } | null {
+  const keepClear: { x: number; y: number }[] = [];
+  for (const n of world.spawns) if (n.kind === "node") keepClear.push({ x: n.x, y: n.y });
+  for (const p of POIS) if ("tx" in p) { const a = scaleTile(p.tx, p.ty); keepClear.push({ x: a.tx * TILE + 16, y: a.ty * TILE + 16 }); }
+  for (const n of NPCS) { const a = scaleTile(n.tx, n.ty); keepClear.push({ x: a.tx * TILE + 16, y: a.ty * TILE + 16 }); }
+  for (let pass = 0; pass < 2; pass++) {
+    for (let tries = 0; tries < 600; tries++) {
+      const tx = 4 + Math.floor(rng() * (world.w - 8));
+      const ty = 4 + Math.floor(rng() * (world.h - 8));
+      const i = ty * world.w + tx;
+      if (!reach[i]) continue;
+      const t = world.tiles[i]!;
+      if (t.block === 1 || t.floor === 1 || t.floor === 2 || t.floor === 3 || t.floor === 9) continue;
+      if (pass === 0 && t.decor !== 0) continue;
+      const x = tx * TILE + 16, y = ty * TILE + 16;
+      if (blocked(world, x, y)) continue;
+      if (Math.hypot(x - from.x, y - from.y) < (pass === 0 ? minDist : 128)) continue;
+      if (keepClear.some((k) => Math.hypot(k.x - x, k.y - y) < TILE * 3)) continue;
+      return { x, y };
+    }
+  }
+  return null;
+}
+
+/** Live-drawn resource nodes (ore, mushrooms; trees reuse the world's tree art). */
+export function paintNode(g: CanvasRenderingContext2D, node: "ore" | "tree" | "shroom" | "fish", x: number, y: number): void {
+  if (node === "tree") return paintTree(g, x, y + 10);
+  g.save();
+  if (node === "ore") {
+    g.fillStyle = "rgba(0,0,0,0.3)";
+    g.beginPath(); g.ellipse(x, y + 12, 13, 4, 0, 0, Math.PI * 2); g.fill();
+    g.fillStyle = "#5b5650";
+    g.beginPath(); g.moveTo(x - 13, y + 11); g.lineTo(x - 9, y - 6); g.lineTo(x, y - 13); g.lineTo(x + 10, y - 7); g.lineTo(x + 14, y + 11); g.closePath(); g.fill();
+    g.fillStyle = "#7a746c";
+    g.beginPath(); g.moveTo(x - 9, y - 6); g.lineTo(x, y - 13); g.lineTo(x + 3, y - 2); g.lineTo(x - 5, y + 2); g.closePath(); g.fill();
+    g.fillStyle = "#e6c15a";
+    g.fillRect(x - 6, y + 2, 3, 3); g.fillRect(x + 3, y - 4, 3, 3); g.fillRect(x + 6, y + 5, 3, 3);
+    g.fillStyle = "#9ad8c8";
+    g.fillRect(x - 1, y + 6, 2, 2);
+  } else if (node === "shroom") {
+    g.fillStyle = "rgba(0,0,0,0.25)";
+    g.beginPath(); g.ellipse(x, y + 12, 12, 3.5, 0, 0, Math.PI * 2); g.fill();
+    const caps: [number, number, number, string][] = [[-7, 4, 6, "#7a5cc8"], [5, 7, 5, "#c8553a"], [0, -2, 7, "#4fa7d9"]];
+    for (const [cx, cy, r, c] of caps) {
+      g.fillStyle = "#e8dcc4";
+      g.fillRect(x + cx - 1, y + cy, 2, 8);
+      g.fillStyle = c;
+      g.beginPath(); g.arc(x + cx, y + cy, r, Math.PI, 0); g.closePath(); g.fill();
+      g.fillStyle = "rgba(255,255,255,0.7)";
+      g.fillRect(x + cx - 2, y + cy - r + 2, 2, 2);
+    }
+  }
+  g.restore();
 }
 
 function paintTree(g: CanvasRenderingContext2D, x: number, y: number): void {

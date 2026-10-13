@@ -34,6 +34,10 @@ export const CREATURE_CELLS: Record<string, [number, number]> = {
   stag: [3, 4],
   wolf: [1, 4],
 };
+/** Enemies are drawn 2x: a 16px cell becomes exactly one 32px tile, so they fit 1x1 hallways. */
+export const CREATURE_SPRITE_SCALE = 2;
+/** Bosses are one tile too. Raise this (e.g. 3) if you want them to tower over the map. */
+export const BOSS_SPRITE_SCALE = 2;
 let image: HTMLImageElement | null = null;
 const fallback = new Map<string, HTMLCanvasElement>();
 function pixelSpirit(type: string): HTMLCanvasElement {
@@ -79,7 +83,7 @@ export function drawCreatureSprite(ctx: CanvasRenderingContext2D, m: MonsterDraw
     image.src = "/sprites/creatures_roguelike.png";
   }
   const cell = m.species ? CREATURE_CELLS[m.species] : undefined;
-  const scale = (m.boss ? 4.8 : 3.1) * (1 + m.rarity * 0.04),
+  const scale = m.boss ? BOSS_SPRITE_SCALE : CREATURE_SPRITE_SCALE,
     bob = Math.round(Math.sin(m.walk * 5) * 1);
   ctx.save();
   ctx.imageSmoothingEnabled = false;
