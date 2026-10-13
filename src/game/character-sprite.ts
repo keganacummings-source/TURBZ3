@@ -4,8 +4,8 @@
  * Composition rules (matches how these tiles were drawn):
  * - Chest armor tiles are FULL-BODY frames — they replace the nude base.
  * - Head / feet / hands / back composite on top when present.
- * - Weapon & shield use grip offsets on the sides.
- * - All layers share the same 32×32 origin; scale is uniform (no squish).
+ * - Weapon & shield are inventory tiles drawn in-hand at ~55% scale (never stamped full-frame over the body).
+ * - All body layers share the same 32×32 origin; scale is uniform.
  */
 
 import type { ActorDraw } from "./sprites";
@@ -258,29 +258,27 @@ function hold(
   if (!img.complete || img.naturalWidth <= 0) return;
   const grip = gripFor(kind);
 
-  // Full-frame weapon/shield art composites at doll origin when not attacking
-  if (img.naturalWidth >= 32 && anim.state !== "attack") {
-    blit(ctx, path, 0, -16, unit);
-    return;
-  }
-
-  let angle = grip.restAngle * (side > 0 ? 1 : 0.6);
+  // Inventory-style tiles — never stamp full-frame over the body
+  let angle = side > 0 ? -0.9 : 0.35;
   if (anim.state === "attack" && side > 0) {
-    angle = grip.restAngle + Math.sin(anim.attackT * Math.PI) * grip.swing;
+    angle = -0.9 + Math.sin(anim.attackT * Math.PI) * 1.35;
   } else if (anim.state === "walk" || anim.state === "run") {
     const speed = anim.state === "run" ? 16 : 10;
-    angle += Math.sin(anim.time * speed) * 0.08 * side;
+    angle += Math.sin(anim.time * speed) * 0.1 * side;
+  } else if (anim.state === "jump") {
+    angle -= 0.2 * side;
   }
 
-  const w = img.naturalWidth * unit * grip.scale;
-  const h = img.naturalHeight * unit * grip.scale;
-  const hx = side > 0 ? 9 : -8;
-  const hy = -11;
+  const handScale = 0.55 * (grip.scale || 1);
+  const w = img.naturalWidth * unit * handScale;
+  const h = img.naturalHeight * unit * handScale;
+  const hx = side > 0 ? 11 : -10;
+  const hy = -10;
 
   ctx.save();
   ctx.translate(hx * unit, hy * unit);
-  ctx.rotate(angle * side);
-  ctx.drawImage(img, -w * 0.35, -h * 0.7, w, h);
+  ctx.rotate(angle);
+  ctx.drawImage(img, -w * 0.3, -h * 0.75, w, h);
   ctx.restore();
 }
 
