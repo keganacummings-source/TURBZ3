@@ -1,7 +1,11 @@
 /**
  * Animated draw of the female Human main character using CharacterPack
  * static 32×32 sprites + procedural motion (walk / run / jump / attack).
- * NPCs stay on the procedural path in sprites.ts.
+ *
+ * Scale notes:
+ * - Source art is 32×32 (DCSS-style). Armor overlays share the same frame origin.
+ * - BASE_SCALE controls on-screen size. Layer offsets are in *source pixels* and
+ *   are multiplied by the same pixel scale so sets stay registered when upscaled.
  */
 
 import type { ActorDraw } from "./sprites";
@@ -25,6 +29,11 @@ export type CharAnim = {
   time: number;
 };
 
+/** On-screen scale multiplier for the 32×32 pack (was ~2.15 — far too small). */
+const BASE_SCALE = 4.6;
+/** Source-pixel → screen-pixel factor applied to both size and offsets. */
+const PX = 0.55;
+
 export function animFromActor(a: ActorDraw, moving: boolean, running: boolean, airborne: boolean): CharAnim {
   const t = a.time ?? 0;
   let state: AnimState = "idle";
@@ -35,7 +44,7 @@ export function animFromActor(a: ActorDraw, moving: boolean, running: boolean, a
   return {
     state,
     attackT: Math.max(0, Math.min(1, a.attack)),
-    jumpY: airborne ? 8 : 0,
+    jumpY: airborne ? 10 : 0,
     time: t,
   };
 }
@@ -69,13 +78,10 @@ function pickItem(slot: string, seed: number): PackItem | null {
   return pool[Math.abs(seed) % pool.length]!;
 }
 
-/** Build visual gear list from packGear, pieces.packPath, or catalog defaults. */
-function resolveVisualGear(a: ActorDraw, optsGear?: Gear[]): Array<{
-  slot: string;
-  packPath: string;
-  packKind: string;
-  packSlot: string;
-}> {
+function resolveVisualGear(
+  a: ActorDraw,
+  optsGear?: Gear[],
+): Array<{ slot: string; packPath: string; packKind: string; packSlot: string }> {
   const out: Array<{ slot: string; packPath: string; packKind: string; packSlot: string }> = [];
   const seen = new Set<string>();
 
@@ -107,7 +113,6 @@ function resolveVisualGear(a: ActorDraw, optsGear?: Gear[]): Array<{
     }
   }
 
-  // Defaults so the hunter is never nude once the pack is loaded
   const seed = pieceStyleSeed(a);
   if (!out.some((x) => x.packSlot === "chest" || x.slot === "chest")) {
     const it = pickItem("chest", seed + 1);
@@ -167,32 +172,33 @@ export function drawCharacterSprite(
   let stretchY = 1;
   let stretchX = 1;
   if (anim.state === "walk") {
-    bob = Math.sin(t * 10) * 1.6;
-    lean = Math.sin(t * 10) * 0.04;
+    bob = Math.sin(t * 10) * 2.2;
+    lean = Math.sin(t * 10) * 0.035;
   } else if (anim.state === "run") {
-    bob = Math.sin(t * 16) * 2.4;
-    lean = 0.08 + Math.sin(t * 16) * 0.05;
+    bob = Math.sin(t * 16) * 3.2;
+    lean = 0.1 + Math.sin(t * 16) * 0.05;
   } else if (anim.state === "jump") {
-    bob = -anim.jumpY - 6;
-    stretchY = 0.92;
-    stretchX = 1.06;
+    bob = -anim.jumpY - 8;
+    stretchY = 0.9;
+    stretchX = 1.08;
   } else if (anim.state === "attack") {
-    bob = Math.sin(anim.attackT * Math.PI) * -1.2;
+    bob = Math.sin(anim.attackT * Math.PI) * -1.6;
   } else {
-    bob = Math.sin(t * 2.2) * 0.5;
+    bob = Math.sin(t * 2.2) * 0.7;
   }
 
-  const scale = (a.scale ?? 1) * 2.15;
-  const sc = scale;
+  const sc = (a.scale ?? 1) * BASE_SCALE;
+  const unit = sc * PX; // 1 source pixel → screen pixels
 
+  // Foot-anchored: a.x/a.y is ground contact under the feet
   ctx.save();
   ctx.translate(a.x, a.y + bob);
   ctx.scale(face * stretchX, stretchY);
   ctx.rotate(lean * face);
 
-  ctx.fillStyle = "rgba(0,0,0,0.28)";
+  ctx.fillStyle = "rgba(0,0,0,0.32)";
   ctx.beginPath();
-  ctx.ellipse(0, 2, 10 * sc * 0.35, 3.2, 0, 0, Math.PI * 2);
+  ctx.ellipse(0, 2, 11 * unit * 0.7, 3.4 * unit * 0.35, 0, 0, Math.PI * 2);
   ctx.fill();
 
   ctx.imageSmoothingEnabled = false;
@@ -207,25 +213,28 @@ export function drawCharacterSprite(
   const hands = visuals.find((g) => g.packSlot === "hands");
   const back = visuals.find((g) => g.packSlot === "back");
 
-  if (back?.packPath) drawLayer(ctx, back.packPath, 0, -14, sc, 0);
-  if (shield) drawHeld(ctx, shield.packPath, shield.packKind || "shield", anim, sc);
+  // DCSS 32×32 frames share origin — draw all layers at the same anchor.
+  const ANCHOR_Y = -16;
 
-  drawLayer(ctx, pack.base.body, 0, -16, sc, 0);
+  if (back?.packPath) drawLayer(ctx, back.packPath, 0, ANCHOR_Y, unit, 0);
+  if (shield) drawHeld(ctx, shield.packPath, shield.packKind || "shield", anim, unit, -1);
 
-  if (feet?.packPath) drawLayer(ctx, feet.packPath, 0, -8, sc * 0.95, 0);
-  if (chest?.packPath) drawLayer(ctx, chest.packPath, 0, -16, sc, 0);
-  if (hands?.packPath) drawLayer(ctx, hands.packPath, 0, -14, sc * 0.9, 0);
-  if (head?.packPath) drawLayer(ctx, head.packPath, 0, -22, sc, 0);
+  drawLayer(ctx, pack.base.body, 0, ANCHOR_Y, unit, 0);
+
+  if (feet?.packPath) drawLayer(ctx, feet.packPath, 0, ANCHOR_Y, unit, 0);
+  if (chest?.packPath) drawLayer(ctx, chest.packPath, 0, ANCHOR_Y, unit, 0);
+  if (hands?.packPath) drawLayer(ctx, hands.packPath, 0, ANCHOR_Y, unit, 0);
+  if (head?.packPath) drawLayer(ctx, head.packPath, 0, ANCHOR_Y, unit, 0);
 
   const hairVis = pack.visuals.find((v) => v.kind === "hair");
-  if (hairVis && a.female && !head) drawLayer(ctx, hairVis.path, 0, -22, sc, 0);
+  if (hairVis && a.female && !head) drawLayer(ctx, hairVis.path, 0, ANCHOR_Y, unit, 0);
 
-  if (weapon) drawHeld(ctx, weapon.packPath, weapon.packKind || "blade", anim, sc);
+  if (weapon) drawHeld(ctx, weapon.packPath, weapon.packKind || "blade", anim, unit, 1);
 
   if (a.hurt > 0) {
     ctx.globalAlpha = a.hurt * 0.5;
     ctx.fillStyle = "#fff";
-    ctx.fillRect(-10 * sc * 0.5, -28 * sc * 0.5, 10 * sc, 28 * sc * 0.5);
+    ctx.fillRect(-10 * unit, -28 * unit, 20 * unit, 28 * unit);
     ctx.globalAlpha = 1;
   }
 
@@ -233,20 +242,21 @@ export function drawCharacterSprite(
   return true;
 }
 
+/** Draw a 32×32 pack layer. ox/oy are source-pixel offsets from feet anchor. */
 function drawLayer(
   ctx: CanvasRenderingContext2D,
   path: string,
   ox: number,
   oy: number,
-  sc: number,
+  unit: number,
   rot: number,
 ): void {
   const img = charImage(path);
   if (!img.complete || img.naturalWidth <= 0) return;
-  const w = img.naturalWidth * sc * 0.5;
-  const h = img.naturalHeight * sc * 0.5;
+  const w = img.naturalWidth * unit;
+  const h = img.naturalHeight * unit;
   ctx.save();
-  ctx.translate(ox, oy);
+  ctx.translate(ox * unit, oy * unit);
   ctx.rotate(rot);
   ctx.drawImage(img, -w / 2, -h / 2, w, h);
   ctx.restore();
@@ -257,28 +267,33 @@ function drawHeld(
   path: string,
   kind: string,
   anim: CharAnim,
-  sc: number,
+  unit: number,
+  side: number,
 ): void {
   const img = charImage(path);
   if (!img.complete || img.naturalWidth <= 0) return;
   const grip = gripFor(kind);
-  let angle = grip.restAngle;
-  if (anim.state === "attack") {
+  let angle = grip.restAngle * side;
+  if (anim.state === "attack" && side > 0) {
     const swing = Math.sin(anim.attackT * Math.PI) * grip.swing;
     angle = grip.restAngle + swing;
   } else if (anim.state === "walk" || anim.state === "run") {
     const speed = anim.state === "run" ? 16 : 10;
-    angle = grip.restAngle + Math.sin(anim.time * speed) * 0.12;
+    angle = grip.restAngle * side + Math.sin(anim.time * speed) * 0.1 * side;
   } else if (anim.state === "jump") {
-    angle = grip.restAngle - 0.25;
+    angle = grip.restAngle * side - 0.2 * side;
   }
 
-  const w = img.naturalWidth * sc * 0.5 * grip.scale;
-  const h = img.naturalHeight * sc * 0.5 * grip.scale;
+  const w = img.naturalWidth * unit * grip.scale;
+  const h = img.naturalHeight * unit * grip.scale;
+
+  const hx = (side > 0 ? 10 : -9) + (grip.hx - 10) * 0.35 * side;
+  const hy = -12 + grip.hy * 0.25;
+
   ctx.save();
-  ctx.translate(grip.hx * sc * 0.35, grip.hy * sc * 0.35 - 12);
+  ctx.translate(hx * unit, hy * unit);
   ctx.rotate(angle);
-  ctx.drawImage(img, -w * 0.35, -h * 0.75, w, h);
+  ctx.drawImage(img, -w * 0.35, -h * 0.7, w, h);
   ctx.restore();
 }
 
