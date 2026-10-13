@@ -79,7 +79,8 @@ export function drawCreatureSprite(ctx: CanvasRenderingContext2D, m: MonsterDraw
     image.src = "/sprites/creatures_roguelike.png";
   }
   const cell = m.species ? CREATURE_CELLS[m.species] : undefined;
-  const scale = (m.boss ? 4.8 : 3.1) * (1 + m.rarity * 0.04),
+  // Living things render at exactly one tile (TILE=32) full size; bosses slightly larger.
+  const scale = (m.boss ? 2.25 : 2) * (1 + Math.min(0.12, m.rarity * 0.02)),
     bob = Math.round(Math.sin(m.walk * 5) * 1);
   ctx.save();
   ctx.imageSmoothingEnabled = false;
