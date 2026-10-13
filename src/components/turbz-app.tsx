@@ -11,6 +11,8 @@ import { Boards, ChatDock, DuelBanner, Hub, Options } from "@/components/hub-ui"
 import { MapBuilder } from "@/components/map-builder";
 import { Create, Play, Title } from "@/components/hunt-screens";
 import { getSnap, subscribe, TurbzGame } from "@/game/engine";
+import { applyHardcorePatch } from "@/game/hardcore-patch";
+import { applyWorldBossPatch } from "@/game/world-boss-patch";
 
 function useSnap() {
   return useSyncExternalStore(subscribe, getSnap, getSnap);
@@ -146,6 +148,8 @@ function Hunt() {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const game = new TurbzGame(canvas);
+    applyHardcorePatch(game);
+    applyWorldBossPatch(game);
     gameRef.current = game;
     game.attachCloud((json: string) => {
       void writeCloudSave(json);
