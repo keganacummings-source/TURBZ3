@@ -16,10 +16,21 @@ export function applyGearPatch(game: any): void {
   const origReceive = game.receiveGear?.bind(game);
   if (origReceive) {
     game.receiveGear = function receiveGear(g: Gear) {
-      if (g && ((g as any).typeless || (g as any).type === "typeless")) {
-        awakenGearType(g, Math.random);
-        const types = (g as any).types?.length ? (g as any).types.join("/") : String(g.type);
-        this.say?.(`Awakened ${g.name} · ${types}.`);
+      // If this is old-set gear without packPath, try swap to pack equivalent on the fly for armor slots
+      if (g && !(g as any).packPath && g.slot !== "weapon" && Math.random() < 0.85) {
+        const pack = rollPackGear(Math.random, g.level || 1, "armor");
+        if (pack) {
+          pack.level = g.level;
+          pack.quality = g.quality;
+          g = pack;
+        }
+      }
+      if (g && ((g as any).typeless || (g as any).type === "typeless" || !(g as any).types)) {
+        if ((g as any).typeless || (g as any).type === "typeless") {
+          awakenGearType(g, Math.random);
+          const types = (g as any).types?.length ? (g as any).types.join("/") : String(g.type);
+          this.say?.(`Awakened ${g.name} · ${types}.`);
+        }
       }
       return origReceive(g);
     };
@@ -31,15 +42,23 @@ export function applyGearPatch(game: any): void {
       const save = this.save;
       const before = save?.gear?.length ?? 0;
       origKill(mob);
-      // Prefer CharacterPack gear on boss kills if nothing dropped
-      if (save && (save.gear?.length ?? 0) === before && mob?.boss) {
-        const piece = rollPackGear(Math.random, Math.max(1, mob.level ?? 1), Math.random() < 0.5 ? "weapon" : "armor");
-        if (piece) this.receiveGear?.(piece);
+      const after = save?.gear?.length ?? 0;
+      // Ensure CharacterPack pieces flow: if nothing dropped, roll pack; if old gear dropped, often add a pack piece too on boss
+      if (save) {
+        const lvl = Math.max(1, mob?.level ?? 1);
+        if (after === before) {
+          const chance = mob?.boss ? 1 : 0.22;
+          if (Math.random() < chance) {
+            const piece = rollPackGear(Math.random, lvl, Math.random() < 0.4 ? "weapon" : "armor");
+            if (piece) this.receiveGear?.(piece);
+          }
+        } else if (mob?.boss) {
+          const piece = rollPackGear(Math.random, lvl + 2, Math.random() < 0.5 ? "weapon" : "armor");
+          if (piece) this.receiveGear?.(piece);
+        }
       }
     };
   }
-
-  // Also bias shop/stock rolls when shop is filled — wrap rollGear callers indirectly via receiveGear only
 
   const canvas = game.canvas as HTMLCanvasElement | undefined;
   if (canvas && !canvas.dataset.gearShield) {
