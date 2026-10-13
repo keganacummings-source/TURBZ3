@@ -13,6 +13,7 @@ import { Create, Play, Title } from "@/components/hunt-screens";
 import { getSnap, subscribe, TurbzGame } from "@/game/engine";
 import { applyHardcorePatch } from "@/game/hardcore-patch";
 import { applyWorldBossPatch } from "@/game/world-boss-patch";
+import { applyGearPatch } from "@/game/gear-patch";
 
 function useSnap() {
   return useSyncExternalStore(subscribe, getSnap, getSnap);
@@ -150,6 +151,7 @@ function Hunt() {
     const game = new TurbzGame(canvas);
     applyHardcorePatch(game);
     applyWorldBossPatch(game);
+    applyGearPatch(game);
     gameRef.current = game;
     game.attachCloud((json: string) => {
       void writeCloudSave(json);
