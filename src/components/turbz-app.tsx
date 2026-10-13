@@ -14,6 +14,7 @@ import { getSnap, subscribe, TurbzGame } from "@/game/engine";
 import { applyHardcorePatch } from "@/game/hardcore-patch";
 import { applyWorldBossPatch } from "@/game/world-boss-patch";
 import { applyGearPatch } from "@/game/gear-patch";
+import { applySkillsPatch } from "@/game/skills-patch";
 
 function useSnap() {
   return useSyncExternalStore(subscribe, getSnap, getSnap);
@@ -152,6 +153,7 @@ function Hunt() {
     applyHardcorePatch(game);
     applyWorldBossPatch(game);
     applyGearPatch(game);
+    applySkillsPatch(game);
     gameRef.current = game;
     game.attachCloud((json: string) => {
       void writeCloudSave(json);
