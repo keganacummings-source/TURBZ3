@@ -3,7 +3,7 @@
  * Loaded from /CharacterPack/catalog.json — items become gear / shop / loot.
  */
 
-import { nextUid, gearPrice, type Gear, type QualityId, type Slot, type TypeId } from "./content";
+import { nextUid, gearPrice, ENCHANTS, type Gear, type QualityId, type Slot, type TypeId, type EnchantRoll } from "./content";
 import { weaponKindFromName } from "./weapon-kind";
 
 export type PackGrip = {
@@ -132,9 +132,24 @@ export function gearFromPackItem(
 ): Gear | null {
   const slot = packSlotToGear(item.slot);
   if (!slot) return null;
-  const type = typeFromName(item.name);
   const style = hashStyle(item.id);
-  const gear: Gear = {
+  // Up to 10 enchants scale with drop level
+  const maxEnch = Math.min(
+    10,
+    1 +
+      Math.floor(level / 5) +
+      (quality === "legendary" ? 3 : quality === "epic" ? 2 : quality === "rare" ? 1 : 0),
+  );
+  const pool = [...ENCHANTS];
+  const enchants: EnchantRoll[] = [];
+  const rng = () => Math.random();
+  for (let i = 0; i < maxEnch && pool.length; i++) {
+    const idx = Math.floor(rng() * pool.length);
+    const def = pool.splice(idx, 1)[0]!;
+    const power = Math.max(1, Math.min(def.max, 1 + Math.floor(level / 8) + Math.floor(rng() * 3)));
+    enchants.push({ id: def.id, power });
+  }
+  const gear = {
     uid: nextUid(),
     slot,
     setId: null,
@@ -142,17 +157,19 @@ export function gearFromPackItem(
     name: item.name,
     level: Math.max(1, level),
     quality,
-    type,
-    enchants: [],
+    type: "normal" as TypeId,
+    types: [] as TypeId[],
+    typeless: true,
+    enchants,
     fxSeed: style * 17 + level,
     price: 0,
-    moves: [],
+    moves: [] as string[],
     packId: item.id,
     packPath: item.path,
     packKind: item.kind,
     packSlot: item.slot,
     weaponKind: slot === "weapon" || item.slot === "shield" ? weaponKindFromName(item.kind || item.name) : undefined,
-  } as Gear;
+  } as Gear & { typeless?: boolean; types?: TypeId[]; packId?: string; packPath?: string; packKind?: string; packSlot?: string; weaponKind?: string };
   gear.price = gearPrice(gear);
   return gear;
 }

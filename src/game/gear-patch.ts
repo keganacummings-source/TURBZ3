@@ -4,7 +4,8 @@
  * - Type rolls on first pickup (armor 1 type, weapons up to 4)
  * - Hold right-click to shield (blocks attacks)
  */
-import { awakenGearType, rollGear, mulberry32, type Gear } from "./content";
+import { rollGear, mulberry32, type Gear } from "./content";
+import { awakenGearType } from "./gear-types";
 import { rollPackGear } from "./character-pack";
 
 export function applyGearPatch(game: any): void {
@@ -15,9 +16,9 @@ export function applyGearPatch(game: any): void {
   const origReceive = game.receiveGear?.bind(game);
   if (origReceive) {
     game.receiveGear = function receiveGear(g: Gear) {
-      if (g && (g.typeless || g.type === "typeless")) {
+      if (g && ((g as any).typeless || (g as any).type === "typeless")) {
         awakenGearType(g, Math.random);
-        const types = g.types?.length ? g.types.join("/") : String(g.type);
+        const types = (g as any).types?.length ? (g as any).types.join("/") : String(g.type);
         this.say?.(`Awakened ${g.name} · ${types}.`);
       }
       return origReceive(g);
@@ -30,12 +31,15 @@ export function applyGearPatch(game: any): void {
       const save = this.save;
       const before = save?.gear?.length ?? 0;
       origKill(mob);
+      // Prefer CharacterPack gear on boss kills if nothing dropped
       if (save && (save.gear?.length ?? 0) === before && mob?.boss) {
         const piece = rollPackGear(Math.random, Math.max(1, mob.level ?? 1), Math.random() < 0.5 ? "weapon" : "armor");
         if (piece) this.receiveGear?.(piece);
       }
     };
   }
+
+  // Also bias shop/stock rolls when shop is filled — wrap rollGear callers indirectly via receiveGear only
 
   const canvas = game.canvas as HTMLCanvasElement | undefined;
   if (canvas && !canvas.dataset.gearShield) {
