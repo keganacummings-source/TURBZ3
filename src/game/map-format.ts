@@ -6,6 +6,8 @@ export const MAP_VERSION = 1;
 
 export type MapTile = WorldTile & {
   sprite?: string;
+  overlay?: string; // WalkThrough stacked sprite (transparent, non-blocking, like doors)
+  walkThrough?: boolean;
 };
 
 export type MapFile = {
@@ -81,6 +83,7 @@ export function mapToWorld(map: MapFile): WorldData {
       block: t.block,
       decor: t.decor,
       sprite: t.sprite,
+      overlay: t.overlay,
     })) as WorldTile[],
     spawns: map.spawns ? map.spawns.map((s) => ({ ...s })) : [],
     cache: null,
@@ -115,8 +118,9 @@ export function parseMapJson(raw: unknown): MapFile {
   if (!Array.isArray(m.tiles) || m.tiles.length !== m.w! * m.h!) throw new Error("Tile count must match the map dimensions.");
   const tiles = m.tiles.map((t) => {
     if (!t || !Number.isInteger(t.floor) || t.floor < 0 || t.floor > 11 || !Number.isInteger(t.biome) || t.biome < 0 || t.biome > 6 || ![0, 1].includes(t.block) || !Number.isInteger(t.decor) || t.decor < 0 || t.decor > 100) throw new Error("Invalid map tile.");
-    if (t.sprite && (typeof t.sprite !== "string" || !/^\/MapAssets\/[A-Za-z0-9_/-]+\.png$/.test(t.sprite) || t.sprite.includes(".."))) throw new Error("Tile sprite must come from MapAssets.");
-    return { floor: t.floor, biome: t.biome, block: t.block, decor: t.decor, ...(t.sprite ? { sprite: t.sprite } : {}) };
+    if (t.sprite && (typeof t.sprite !== "string" || (!/^\/MapAssets\/[A-Za-z0-9_/-]+\.png$/.test(t.sprite) && !t.sprite.startsWith("custom:")) || t.sprite.includes(".."))) throw new Error("Tile sprite must come from MapAssets or CustomSprites.");
+    if (t.overlay && (typeof t.overlay !== "string" || (!/^\/MapAssets\/[A-Za-z0-9_/-]+\.png$/.test(t.overlay) && !t.overlay.startsWith("custom:")) || t.overlay.includes(".."))) throw new Error("Overlay sprite must come from MapAssets or CustomSprites.");
+    return { floor: t.floor, biome: t.biome, block: t.block, decor: t.decor, ...(t.sprite ? { sprite: t.sprite } : {}), ...(t.overlay ? { overlay: t.overlay } : {}), ...(t.walkThrough ? { walkThrough: true } : {}) };
   });
   const spawn = m.spawn ?? { tx: 1, ty: 1 };
   if (!Number.isInteger(spawn.tx) || !Number.isInteger(spawn.ty) || spawn.tx < 0 || spawn.ty < 0 || spawn.tx >= m.w! || spawn.ty >= m.h! || tiles[spawn.ty * m.w! + spawn.tx]!.block) throw new Error("Player start must be on a walkable tile inside the map.");
