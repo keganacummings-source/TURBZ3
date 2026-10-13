@@ -3,8 +3,7 @@
  * Loaded from /CharacterPack/catalog.json — items become gear / shop / loot.
  */
 
-import type { QualityId, Slot, TypeId } from "./content";
-import { nextUid, gearPrice, type Gear } from "./content";
+import { nextUid, gearPrice, weaponKindFromName, type Gear, type QualityId, type Slot, type TypeId } from "./content";
 
 export type PackGrip = {
   hx: number;
@@ -151,6 +150,7 @@ export function gearFromPackItem(
     packPath: item.path,
     packKind: item.kind,
     packSlot: item.slot,
+    weaponKind: slot === "weapon" || item.slot === "shield" ? weaponKindFromName(item.kind || item.name) : undefined,
   };
   gear.price = gearPrice(gear);
   return gear;
