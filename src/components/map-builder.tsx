@@ -1,16 +1,26 @@
 import { useEffect, useRef, useState } from "react";
-import { MONSTERS, TILE } from "@/game/content";
+import { ANIMALS, MONSTERS, TILE } from "@/game/content";
 import {
   downloadMapFile,
   emptyMap,
   FLOOR_COLOR,
   parseMapJson,
   type MapFile,
+  type SpawnZone,
+  type ZoneType,
 } from "@/game/map-format";
 import { loadTileCatalog, tileImage, type AtlasTile, type TileCatalog } from "@/game/tile-atlas";
 
 const KEY = "turbz-designer-maps-v1";
-type Tool = "pan" | "paint" | "erase" | "wall" | "start" | "enemy" | "boss" | "remove";
+type Tool = "pan" | "paint" | "erase" | "wall" | "start" | "enemy" | "boss" | "zone" | "remove";
+const ZONE_LABEL: Record<ZoneType, string> = {
+  enemy: "Enemy",
+  boss: "Boss",
+  mixed: "Mixed enemies",
+  ore: "Ore nodes",
+  tree: "Tree nodes",
+  shroom: "Mushroom nodes",
+};
 export function MapBuilder({ onBack }: { onBack: () => void }) {
   const [map, setMap] = useState(() => ({
     ...emptyMap("new-dungeon", "New Dungeon", 48, 32, 8),
@@ -22,6 +32,12 @@ export function MapBuilder({ onBack }: { onBack: () => void }) {
   const [tile, setTile] = useState<AtlasTile | null>(null);
   const [tool, setTool] = useState<Tool>("paint");
   const [species, setSpecies] = useState("gaikotsu");
+  const [zoneType, setZoneType] = useState<ZoneType>("enemy");
+  const [levelMin, setLevelMin] = useState(1);
+  const [levelMax, setLevelMax] = useState(5);
+  const [zoneCount, setZoneCount] = useState(4);
+  const [zoneId, setZoneId] = useState<string | null>(null);
+  const [draft, setDraft] = useState<{ x: number; y: number; x2: number; y2: number } | null>(null);
   const [zoom, setZoom] = useState(24);
   const [status, setStatus] = useState("Pick a tile and paint. Scroll to explore your map.");
   const [saved, setSaved] = useState<MapFile[]>([]);
@@ -38,7 +54,8 @@ export function MapBuilder({ onBack }: { onBack: () => void }) {
   const pan = useRef({ x: 0, y: 0, left: 0, top: 0 });
   const painting = useRef(false),
     lastCell = useRef(-1),
-    current = useRef<MapFile>(map);
+    current = useRef<MapFile>(map),
+    draftRef = useRef<{ x: number; y: number; x2: number; y2: number } | null>(null);
   const setDocument = (next: MapFile) => {
     current.current = next;
     setMap(next as typeof map);
@@ -99,6 +116,25 @@ export function MapBuilder({ onBack }: { onBack: () => void }) {
           ctx.strokeStyle = t.block ? "#c4473a" : "#ffffff18";
           ctx.strokeRect(dx, dy, zoom, zoom);
         }
+      for (const z of map.zones ?? []) {
+        const dx = z.tx * zoom - view.x, dy = z.ty * zoom - view.y;
+        ctx.fillStyle = z.type === "boss" ? "#c4473acc" : z.type === "mixed" ? "#b4a6ffcc" : z.type === "enemy" ? "#e6c15acc" : "#8fd06acc";
+        ctx.fillRect(dx, dy, z.tw * zoom, z.th * zoom);
+        ctx.strokeStyle = z.id === zoneId ? "#fff6e8" : "#e6c15a";
+        ctx.lineWidth = z.id === zoneId ? 3 : 1;
+        ctx.strokeRect(dx + 1, dy + 1, z.tw * zoom - 2, z.th * zoom - 2);
+        if (zoom >= 16) {
+          ctx.fillStyle = "#fff6e8";
+          ctx.font = "12px monospace";
+          const who = z.type === "enemy" || z.type === "boss" ? (MONSTERS.find((m) => m.id === z.species)?.name ?? ANIMALS.find((m) => m.id === z.species)?.name ?? z.species) : ZONE_LABEL[z.type];
+          ctx.fillText(`${who} · lv ${z.levelMin}-${z.levelMax} · x${z.count}`, dx + 4, dy + 14);
+        }
+      }
+      if (draft) {
+        const tx = Math.min(draft.x, draft.x2), ty = Math.min(draft.y, draft.y2);
+        ctx.strokeStyle = "#fff6e8";
+        ctx.strokeRect(tx * zoom - view.x, ty * zoom - view.y, (Math.abs(draft.x2 - draft.x) + 1) * zoom, (Math.abs(draft.y2 - draft.y) + 1) * zoom);
+      }
       for (const s of map.spawns ?? []) {
         ctx.fillStyle = s.boss ? "#c4473a" : "#e6c15a";
         ctx.font = "bold 14px monospace";
@@ -121,7 +157,7 @@ export function MapBuilder({ onBack }: { onBack: () => void }) {
     };
     draw();
     return () => cancelAnimationFrame(frame);
-  }, [map, view, zoom]);
+  }, [map, view, zoom, draft, zoneId]);
   useEffect(() => {
     setWidth(map.w);
     setHeight(map.h);
@@ -130,6 +166,74 @@ export function MapBuilder({ onBack }: { onBack: () => void }) {
   function checkpoint() {
     setHistory((h) => [...h.slice(-19), structuredClone(current.current)]);
     setRedo([]);
+  }
+  function rememberDraft(next: { x: number; y: number; x2: number; y2: number } | null) {
+    draftRef.current = next;
+    setDraft(next);
+  }
+  function cellAt(e: React.PointerEvent<HTMLCanvasElement>) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    return {
+      x: Math.floor((e.clientX - rect.left + (viewport.current?.scrollLeft ?? 0)) / zoom),
+      y: Math.floor((e.clientY - rect.top + (viewport.current?.scrollTop ?? 0)) / zoom),
+    };
+  }
+  function clampZone(z: SpawnZone, w: number, h: number): SpawnZone {
+    const tx = Math.max(0, Math.min(w - 1, Math.floor(z.tx)));
+    const ty = Math.max(0, Math.min(h - 1, Math.floor(z.ty)));
+    const tw = Math.max(1, Math.min(w - tx, Math.floor(z.tw)));
+    const th = Math.max(1, Math.min(h - ty, Math.floor(z.th)));
+    const lo = Math.max(1, Math.min(100, Math.floor(z.levelMin) || 1));
+    const hi = Math.max(lo, Math.min(100, Math.floor(z.levelMax) || lo));
+    const count = Math.max(1, Math.min(40, Math.floor(z.count) || 1));
+    const species = z.type === "enemy" || z.type === "boss" ? z.species || "gaikotsu" : undefined;
+    return { id: z.id, type: z.type, tx, ty, tw, th, ...(species ? { species } : {}), levelMin: lo, levelMax: hi, count };
+  }
+  function zoneWalkable(tx: number, ty: number, tw: number, th: number) {
+    const m = current.current;
+    for (let y = ty; y < ty + th; y++) for (let x = tx; x < tx + tw; x++) if (!m.tiles[y * m.w + x]?.block) return true;
+    return false;
+  }
+  function commitZone(a: { x: number; y: number }, b: { x: number; y: number }) {
+    const m = current.current;
+    const tx = Math.max(0, Math.min(a.x, b.x, m.w - 1));
+    const ty = Math.max(0, Math.min(a.y, b.y, m.h - 1));
+    const x2 = Math.max(0, Math.min(m.w - 1, Math.max(a.x, b.x)));
+    const y2 = Math.max(0, Math.min(m.h - 1, Math.max(a.y, b.y)));
+    const tw = x2 - tx + 1, th = y2 - ty + 1;
+    if (tw === 1 && th === 1) {
+      const hit = (m.zones ?? []).find((z) => tx >= z.tx && ty >= z.ty && tx < z.tx + z.tw && ty < z.ty + z.th);
+      if (hit) {
+        setZoneId(hit.id);
+        setZoneType(hit.type);
+        setLevelMin(hit.levelMin);
+        setLevelMax(hit.levelMax);
+        setZoneCount(hit.count);
+        if (hit.species) setSpecies(hit.species);
+        setStatus("Selected spawn zone. Edit type, levels, and count below.");
+        return;
+      }
+    }
+    if (!zoneWalkable(tx, ty, tw, th)) return setStatus("A spawn zone needs at least one walkable tile.");
+    const zone = clampZone({
+      id: crypto.randomUUID(),
+      type: zoneType,
+      tx, ty, tw, th,
+      species,
+      levelMin,
+      levelMax,
+      count: zoneCount,
+    }, m.w, m.h);
+    checkpoint();
+    setDocument({ ...m, zones: [...(m.zones ?? []), zone] });
+    setZoneId(zone.id);
+    setStatus(`${ZONE_LABEL[zone.type]} zone · ${zone.tw}×${zone.th} · ${zone.count} spawns · levels ${zone.levelMin}–${zone.levelMax}.`);
+  }
+  function patchZone(patch: Partial<SpawnZone>) {
+    if (!zoneId) return;
+    const m = current.current;
+    const zones = (m.zones ?? []).map((z) => z.id === zoneId ? clampZone({ ...z, ...patch }, m.w, m.h) : z);
+    setDocument({ ...m, zones });
   }
   function paint(e: React.PointerEvent<HTMLCanvasElement>) {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -153,7 +257,7 @@ export function MapBuilder({ onBack }: { onBack: () => void }) {
         species,
         x: (x + 0.5) * TILE,
         y: (y + 0.5) * TILE,
-        level: tool === "boss" ? 10 : 1,
+        level: Math.max(1, Math.min(100, Math.floor(tool === "boss" ? Math.max(levelMin, levelMax) : levelMin) || 1)),
         boss: tool === "boss",
       });
     } else if (tool === "remove")
@@ -433,6 +537,7 @@ export function MapBuilder({ onBack }: { onBack: () => void }) {
                     ["start", "Player start"],
                     ["enemy", "Enemy spawn"],
                     ["boss", "Boss spawn"],
+                    ["zone", "Spawn zone"],
                     ["remove", "Remove entity"],
                   ] as const
                 ).map(([id, label]) => (
@@ -443,18 +548,61 @@ export function MapBuilder({ onBack }: { onBack: () => void }) {
               </select>
             </label>
             <label>
-              Enemy
+              Enemy type
               <select
                 aria-label="Enemy species"
                 value={species}
-                onChange={(e) => setSpecies(e.target.value)}
+                onChange={(e) => {
+                  setSpecies(e.target.value);
+                  if (zoneId) patchZone({ species: e.target.value });
+                }}
               >
-                {MONSTERS.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name}
+                <optgroup label="Spirits">
+                  {MONSTERS.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name}
+                    </option>
+                  ))}
+                </optgroup>
+                <optgroup label="Animals">
+                  {ANIMALS.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name}
+                    </option>
+                  ))}
+                </optgroup>
+              </select>
+            </label>
+            <label>
+              Zone type
+              <select
+                aria-label="Spawn zone type"
+                value={zoneType}
+                onChange={(e) => {
+                  const type = e.target.value as ZoneType;
+                  setZoneType(type);
+                  setTool("zone");
+                  if (zoneId) patchZone({ type, species });
+                }}
+              >
+                {(Object.entries(ZONE_LABEL) as [ZoneType, string][]).map(([id, label]) => (
+                  <option key={id} value={id}>
+                    {label}
                   </option>
                 ))}
               </select>
+            </label>
+            <label>
+              Level min
+              <input className="px-input" aria-label="Zone level minimum" type="number" min={1} max={100} value={levelMin} onFocus={checkpoint} onChange={(e) => { const n = Number(e.target.value); setLevelMin(n); if (zoneId) patchZone({ levelMin: n }); }} />
+            </label>
+            <label>
+              Level max
+              <input className="px-input" aria-label="Zone level maximum" type="number" min={1} max={100} value={levelMax} onFocus={checkpoint} onChange={(e) => { const n = Number(e.target.value); setLevelMax(n); if (zoneId) patchZone({ levelMax: n }); }} />
+            </label>
+            <label>
+              Spawn count
+              <input className="px-input" aria-label="Zone spawn count" type="number" min={1} max={40} value={zoneCount} onFocus={checkpoint} onChange={(e) => { const n = Number(e.target.value); setZoneCount(n); if (zoneId) patchZone({ count: n }); }} />
             </label>
             <label>
               Zoom
@@ -471,7 +619,7 @@ export function MapBuilder({ onBack }: { onBack: () => void }) {
               </select>
             </label>
             <p>
-              {map.w} × {map.h} · {map.spawns?.length ?? 0} entities
+              {map.w} × {map.h} · {map.spawns?.length ?? 0} entities · {map.zones?.length ?? 0} zones
             </p>
           </div>
           <div
@@ -499,34 +647,84 @@ export function MapBuilder({ onBack }: { onBack: () => void }) {
                       left: viewport.current?.scrollLeft ?? 0,
                       top: viewport.current?.scrollTop ?? 0,
                     };
-                  else {
+                  else if (tool === "zone") {
+                    const c = cellAt(e);
+                    if (c.x < 0 || c.y < 0 || c.x >= current.current.w || c.y >= current.current.h) return;
+                    rememberDraft({ x: c.x, y: c.y, x2: c.x, y2: c.y });
+                  } else {
                     checkpoint();
                     paint(e);
                   }
                 }}
                 onPointerMove={(e) => {
-                  if (painting.current) {
-                    if (tool === "pan")
-                      viewport.current?.scrollTo(
-                        pan.current.left + pan.current.x - e.clientX,
-                        pan.current.top + pan.current.y - e.clientY,
-                      );
-                    else paint(e);
-                  }
+                  if (!painting.current) return;
+                  if (tool === "pan")
+                    viewport.current?.scrollTo(
+                      pan.current.left + pan.current.x - e.clientX,
+                      pan.current.top + pan.current.y - e.clientY,
+                    );
+                  else if (tool === "zone") {
+                    const c = cellAt(e);
+                    const d = draftRef.current;
+                    if (!d) return;
+                    rememberDraft({
+                      ...d,
+                      x2: Math.max(0, Math.min(current.current.w - 1, c.x)),
+                      y2: Math.max(0, Math.min(current.current.h - 1, c.y)),
+                    });
+                  } else paint(e);
                 }}
                 onPointerUp={() => {
                   painting.current = false;
+                  const d = draftRef.current;
+                  if (tool === "zone" && d) {
+                    rememberDraft(null);
+                    commitZone({ x: d.x, y: d.y }, { x: d.x2, y: d.y2 });
+                  }
                 }}
                 onPointerCancel={() => {
                   painting.current = false;
+                  rememberDraft(null);
                 }}
               />
             </div>
           </div>
           <p className="text-dim">
-            S = player start · E = enemy · B = boss. Files stay in Designer Mode until included in a
-            future update.
+            S = player start · E = enemy · B = boss. Drag with Spawn zone to paint a rectangle. Click a zone to edit its type, enemy, level range, and how many spawn. Zones fill in when the map is played. Files stay in Designer Mode until included in a future update.
           </p>
+          {(map.zones ?? []).length > 0 && (
+            <div className="designer-toolbar px-panel">
+              <label>
+                Edit zone
+                <select aria-label="Spawn zones" value={zoneId ?? ""} onChange={(e) => {
+                  const z = (map.zones ?? []).find((z) => z.id === e.target.value);
+                  setZoneId(z?.id ?? null);
+                  if (!z) return;
+                  setZoneType(z.type);
+                  setLevelMin(z.levelMin);
+                  setLevelMax(z.levelMax);
+                  setZoneCount(z.count);
+                  if (z.species) setSpecies(z.species);
+                }}>
+                  <option value="">Select a zone</option>
+                  {(map.zones ?? []).map((z, i) => (
+                    <option key={z.id} value={z.id}>
+                      {i + 1}. {ZONE_LABEL[z.type]} · lv {z.levelMin}-{z.levelMax} · x{z.count}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button className="px-btn" disabled={!zoneId} onClick={() => {
+                if (!zoneId) return;
+                checkpoint();
+                setDocument({ ...current.current, zones: (current.current.zones ?? []).filter((z) => z.id !== zoneId) });
+                setZoneId(null);
+                setStatus("Spawn zone removed.");
+              }}>
+                Delete zone
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </section>

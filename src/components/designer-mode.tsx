@@ -20,7 +20,7 @@ export function DesignerMode({ onBack }: { onBack: () => void }) {
         <button className="px-panel designer-tool" onClick={() => setTool("map")}>
           <span className="font-display text-kyo">Map Builder</span>
           <p>Build Bossrooms, Dungeons, and full Worlds with the supplied tile collection.</p>
-          <p className="text-dim">Paint terrain · collision · spawns · save · import / export</p>
+          <p className="text-dim">Paint terrain · collision · enemy zones · spawns · save · import / export</p>
         </button>
         <button className="px-panel designer-tool" onClick={() => setTool("weapon")}>
           <span className="font-display text-kyo">Weapon Designer</span>

@@ -25,7 +25,7 @@ export type Spawn = {
   kind: "mob" | "node";
   species?: string;
   node?: "ore" | "tree" | "shroom" | "fish";
-  /** Picked up automatically when the player walks next to it (outside Hardcore). */
+  /** Legacy flag. Harvest never starts from walking into a node; press E. */
   auto?: boolean;
   x: number;
   y: number;

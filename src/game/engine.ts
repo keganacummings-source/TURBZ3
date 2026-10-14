@@ -12,6 +12,8 @@ import {
   ANIMAL_BY_ID,
   ITEM_BY_ID,
   ITEMS,
+  CRAFT_BY_ID,
+  CRAFT_RECIPES,
   MONSTER_BY_ID,
   MONSTERS,
   MOVE_BY_ID,
@@ -93,7 +95,7 @@ import {
   type WorldData,
 } from "./world";
 
-export type Panel = null | "bag" | "skills" | "quests" | "map" | "talk" | "shop" | "death" | "pause" | "trade" | "ghost" | "moves" | "chat" | "bounty" | "rebirth" | "survival";
+export type Panel = null | "bag" | "skills" | "quests" | "map" | "talk" | "shop" | "death" | "pause" | "trade" | "ghost" | "moves" | "chat" | "bounty" | "rebirth" | "survival" | "craft";
 export type Snap = {
   mode: "title" | "create" | "play";
   hasSave: boolean;
@@ -151,6 +153,7 @@ export type Snap = {
   bountyPlace: string;
   unlocked: { id: string; name: string; race: RaceId; bonus: string }[];
   hint: string;
+  prompt: string;
   foe: string;
   menu: { sx: number; sy: number; title: string; lines: string[]; actions: { id: string; label: string }[] } | null;
   mapX: number;
@@ -258,6 +261,7 @@ const emptySnap = (): Snap => ({
 	bountyPlace: "",
 	unlocked: [],
 	hint: "",
+	prompt: "",
 	foe: "",
 	menu: null,
 	mapX: 0,
@@ -460,6 +464,7 @@ export class TurbzGame {
 				if (digit >= 1 && digit <= 9) this.cast(digit - 1);
 			}
 			if (e.code === "KeyE") this.interact();
+			if (e.code === "KeyC") this.toggle("craft");
 			if (e.code === "KeyI" || e.code === "KeyB") this.toggle("bag");
 			if (e.code === "KeyK") this.toggle("skills");
 			if (e.code === "KeyQ") this.toggle("quests");
@@ -930,7 +935,12 @@ export class TurbzGame {
 		this.rollT = Math.max(0, this.rollT - dt);
 		this.castLock = Math.max(0, this.castLock - dt);
 		if (!this.duel) this.defFatigue = Math.max(0, (this.defFatigue ?? 0) - dt * 0.35);
-		if (this.lunge) this.tickLunge(dt);
+		if (this.channel) {
+			this.vx = 0;
+			this.vy = 0;
+			this.dest = null;
+			this.path = [];
+		} else if (this.lunge) this.tickLunge(dt);
 		else if (this.autoplay && !this.typing() && !this.sleeping && !(this.rules === "hardcore" && this.duel)) this.tickAutoplay(dt);
 		else {
 			let ix = 0;
@@ -995,7 +1005,6 @@ export class TurbzGame {
 		}
 		this.tickNodeRespawn(dt);
 		this.visitRegion();
-		this.autoHarvest();
 		const set = this.setInfo();
 		if (set.on && set.fx && this.combat > 0) {
 			this.setProc += dt;
@@ -1020,6 +1029,18 @@ export class TurbzGame {
 	tickAutoplay(dt) {
 		const save = this.save;
 		if (this.dead || !this.world) return;
+		// Stand still and use the node. Walking into it never starts a harvest.
+		if (this.channel) {
+			this.path = [];
+			return;
+		}
+		const ready = this.autoGatherTarget();
+		if (ready) {
+			this.path = [];
+			if (ready === "fish") this.startFishing();
+			else this.startNode(ready.id, ready.node);
+			return;
+		}
 		const hpPct = save.hp / Math.max(1, this.maxHp());
 		const threat = this.nearestMob(save.x, save.y, 90);
 		if (hpPct < .34 && threat) {
@@ -1087,13 +1108,25 @@ export class TurbzGame {
 		const save = this.save;
 		if (id === "mining" || id === "woodcutting" || id === "fishing" || id === "shroom") {
 			const node = id === "mining" ? "ore" : id === "woodcutting" ? "tree" : id === "fishing" ? "fish" : "shroom";
-			if (node === "fish" && nearestWaterTile(this.world, save.x, save.y, 80)) {
-				this.path = [];
-				if (!this.channel) this.startFishing();
-				return true;
+			if (node === "fish") {
+				if (nearestWaterTile(this.world, save.x, save.y, 80)) {
+					this.path = [];
+					if (!this.channel) this.startFishing();
+					return true;
+				}
+				const shore = nearestShore(this.world, save.x, save.y);
+				return shore ? this.walkTo(shore.x, shore.y) : false;
 			}
 			const at = this.nearestNode(node);
-			return at ? this.walkTo(at.x, at.y) : false;
+			if (!at) return false;
+			if (Math.hypot(at.x - save.x, at.y - save.y) <= 64) {
+				const live = this.nodeNear(node, 64);
+				this.path = [];
+				if (live) this.startNode(live.id, live.node);
+				return true;
+			}
+			const stand = this.standBeside(at.x, at.y);
+			return this.walkTo(stand.x, stand.y);
 		}
 		if (id === "trading") {
 			if ([
@@ -1112,20 +1145,22 @@ export class TurbzGame {
 			return beast ? this.walkTo(beast.x, beast.y) : false;
 		}
 		if (id === "alchemy") {
-			if ((save.bag.dreamspore ?? 0) > 0 && (save.bag.embercap ?? 0) > 0) {
-				this.brew("warmth");
-				return true;
-			}
-			if ((save.bag.ironroot ?? 0) > 0 && (save.bag.mushroom ?? 0) > 0) {
-				this.brew("ward");
-				return true;
-			}
-			if ((save.bag.dreamspore ?? 0) > 0 && (save.bag.blue_lantern ?? 0) > 0) {
-				this.brew("eye");
+			const recipe = CRAFT_RECIPES.find((r) => Object.entries(r.costs).every(([k, n]) => (save.bag[k] ?? 0) >= n));
+			if (recipe) {
+				this.brew(recipe.id);
+				this.path = [];
 				return true;
 			}
 			const at = this.nearestNode("shroom");
-			return at ? this.walkTo(at.x, at.y) : false;
+			if (!at) return false;
+			if (Math.hypot(at.x - save.x, at.y - save.y) <= 64) {
+				const live = this.nodeNear("shroom", 64);
+				this.path = [];
+				if (live) this.startNode(live.id, live.node);
+				return true;
+			}
+			const stand = this.standBeside(at.x, at.y);
+			return this.walkTo(stand.x, stand.y);
 		}
 		if (id === "social") {
 			let best = null;
@@ -1224,6 +1259,30 @@ export class TurbzGame {
 		}
 		return best;
 	}
+	/** Where autoplay should stop and press E, instead of walking onto the node. */
+	autoGatherTarget() {
+		const save = this.save;
+		const id = this.grind;
+		if (!save || !this.world || !id || this.channel) return null;
+		if (id === "fishing") return nearestWaterTile(this.world, save.x, save.y, 80) ? "fish" : null;
+		if (id === "alchemy" && CRAFT_RECIPES.some((r) => Object.entries(r.costs).every(([k, n]) => (save.bag[k] ?? 0) >= n))) return null;
+		const node = id === "mining" ? "ore" : id === "woodcutting" ? "tree" : id === "shroom" || id === "alchemy" ? "shroom" : null;
+		return node ? this.nodeNear(node, 64) : null;
+	}
+	/** A walkable tile beside a node, so autoplay does not path into the node itself. */
+	standBeside(x, y) {
+		const save = this.save;
+		let best = null;
+		let bd = 1e9;
+		for (const [dx, dy] of [[32, 0], [-32, 0], [0, 32], [0, -32], [32, 32], [32, -32], [-32, 32], [-32, -32]]) {
+			const px = x + dx;
+			const py = y + dy;
+			if (blocked(this.world, px, py)) continue;
+			const d = Math.hypot(px - save.x, py - save.y);
+			if (d < bd) { bd = d; best = { x: px, y: py }; }
+		}
+		return best ?? { x, y };
+	}
 	/** Nearest live resource node of a kind (or any kind) within `reach` px of the player. */
 	nodeNear(node, reach = 64, autoOnly = false) {
 		const save = this.save;
@@ -1266,6 +1325,8 @@ export class TurbzGame {
 		if (this.channel || this.dead || !this.save) return;
 		const save = this.save;
 		if (!nearestWaterTile(this.world, save.x, save.y, 80)) { this.say("Stand beside water to fish."); return; }
+		this.dest = null;
+		this.path = [];
 		const perk = 1 - Math.min(75, this.chan("fish_luck")) / 100;
 		const wait = (FISH_BITE_MIN + Math.random() * (FISH_BITE_MAX - FISH_BITE_MIN)) * perk;
 		this.channel = { kind: "fishing", x: save.x, y: save.y, map: save.map, t: 0, need: Math.max(.25, wait) };
@@ -2338,34 +2399,16 @@ export class TurbzGame {
 			"relic"
 		].every((s) => have.has(s));
 	}
-	autoHarvest() {
+	gatherPrompt() {
 		const save = this.save;
-		if (!save || save.map !== "world" || this.dead || this.channel || this.rules === "hardcore") return;
-		// Only the starting resource nodes (and their respawns) are picked up by walking over them.
-		const n = this.nodeNear(null, 64, true);
-		if (n) this.harvestNow(n.id, n.node);
-	}
-	harvestNow(id, node) {
-		this.depleteNode(id);
-		const luck = 1 + this.chan("harvest") / 100;
-		if (node === "ore") {
-			const n = Math.max(1, Math.floor((1 + Math.random()) * luck));
-			this.giveItem("ore", n);
-			this.gainSkill("mining", 14);
-			this.say(`Ore x${n}.`);
-		} else if (node === "tree") {
-			const n = Math.max(1, Math.floor((1 + Math.random()) * luck));
-			this.giveItem("timber", n);
-			this.gainSkill("woodcutting", 14);
-			this.say(`Timber x${n}.`);
-		} else if (node === "shroom") {
-			const bonus = this.chan("shroom_sense");
-			this.giveItem(Math.random() < .34 ? "dreamspore" : Math.random() < .5 ? "embercap" : "blue_lantern", 1 + (bonus > 20 ? 1 : 0));
-			this.giveItem("mushroom", 1);
-			this.gainSkill("shroom", 16);
-			this.say("The patch gives.");
+		if (!save || this.dead || this.channel || !this.world) return "";
+		const n = this.nodeNear(null, 64);
+		if (n) {
+			const verb = n.node === "ore" ? "mine" : n.node === "tree" ? "chop" : "forage";
+			return `Press E to ${verb}`;
 		}
-		this.persist();
+		if (nearestWaterTile(this.world, save.x, save.y, 80)) return "Press E to fish";
+		return "";
 	}
 	bankAccount(save: Save) {
 		if (save.deathBanked) return 0;
@@ -2751,6 +2794,8 @@ export class TurbzGame {
 			this.say("Already gathered.");
 			return;
 		}
+		this.dest = null;
+		this.path = [];
 		const skill = node === "ore" ? "mining" : node === "tree" ? "woodcutting" : "shroom";
 		const lv = this.save.skills[skill].level;
 		const need = Math.max(.45, 1.15 - lv * .008);
@@ -2759,7 +2804,7 @@ export class TurbzGame {
 			t: 0,
 			need
 		};
-		this.say("Working...");
+		this.say(node === "ore" ? "Mining..." : node === "tree" ? "Chopping..." : "Foraging...");
 	}
 	finishChannel() {
 		this.save;
@@ -2781,7 +2826,6 @@ export class TurbzGame {
 			return;
 		}
 		const [node, id] = ch.kind.split(":");
-		// The node may already be gone (auto-harvested, or taken by a stale channel).
 		if (!this.world.spawns.some((n) => n.id === id && n.kind === "node")) return;
 		this.depleteNode(id);
 		const luck = 1 + this.chan("harvest") / 100;
@@ -2789,7 +2833,10 @@ export class TurbzGame {
 			const n = Math.max(1, Math.floor((1 + Math.random()) * luck));
 			this.giveItem("ore", n);
 			this.gainSkill("mining", 14);
-			this.say(`Ore x${n}.`);
+			if (Math.random() < 0.28) {
+				this.giveItem("ironroot", 1);
+				this.say(`Ore x${n}. Ironroot in the vein.`);
+			} else this.say(`Ore x${n}.`);
 		} else if (node === "tree") {
 			const n = Math.max(1, Math.floor((1 + Math.random()) * luck));
 			this.giveItem("timber", n);
@@ -3143,18 +3190,26 @@ export class TurbzGame {
 	}
 	brew(recipe) {
 		const save = this.save;
-		const take = (id, n) => {
-			if ((save.bag[id] ?? 0) < n) return false;
-			save.bag[id] -= n;
-			return true;
-		};
-		if (recipe === "warmth" && take("dreamspore", 1) && take("embercap", 1)) this.giveItem("warmth_tonic", 1);
-		else if (recipe === "ward" && take("ironroot", 1) && take("mushroom", 1)) this.giveItem("ironroot_phial", 1);
-		else if (recipe === "eye" && take("dreamspore", 1) && take("blue_lantern", 1)) this.giveItem("cats_eye", 1);
-		else if (recipe === "meal" && take("fish", 1)) this.giveItem("fish_meal", 1);
-		else return this.say("Missing ingredients.");
-		this.gainSkill(recipe === "meal" ? "fishing" : "alchemy", 18);
-		this.say("Brewed.");
+		if (!save) return;
+		if (recipe === "meal") {
+			if ((save.bag.fish ?? 0) < 1) return this.say("Missing ingredients.");
+			save.bag.fish -= 1;
+			this.giveItem("fish_meal", 1);
+			this.gainSkill("fishing", 18);
+			this.say("Cooked.");
+			this.persist();
+			this.syncHud(true);
+			return;
+		}
+		const def = CRAFT_BY_ID[recipe];
+		if (!def) return this.say("Unknown recipe.");
+		for (const [id, n] of Object.entries(def.costs)) {
+			if ((save.bag[id] ?? 0) < n) return this.say(`Missing ${ITEM_BY_ID[id]?.name ?? id}.`);
+		}
+		for (const [id, n] of Object.entries(def.costs)) save.bag[id] -= n;
+		this.giveItem(def.output, def.count);
+		this.gainSkill(def.skill, def.xp);
+		this.say(`Brewed ${def.name}.`);
 		this.persist();
 		this.syncHud(true);
 	}
@@ -4042,8 +4097,9 @@ export class TurbzGame {
 			net: snap.net,
 			roomCode: snap.roomCode,
 			peers: snap.peers,
-			aim: this.castLock > 0 ? "Casting..." : this.channel ? "Gathering..." : "Right-click for menus. Walk into a node. Click a keeper you are near.",
+			aim: this.castLock > 0 ? "Casting..." : this.channel ? (this.channel.kind === "fishing" ? "Fishing..." : "Gathering...") : "Walk up to a node, then press E. Right-click for menus.",
 			hint: this.hint,
+			prompt: this.gatherPrompt(),
 			foe: (() => {
 				const mob = this.nearestMob(save.x, save.y, 230);
 				if (!mob || this.combat <= 0 && mob.hurt <= 0) return "";
@@ -4568,6 +4624,10 @@ export class TurbzGame {
 				label: "Bag"
 			},
 			{
+				id: "menu:craft",
+				label: "Crafting"
+			},
+			{
 				id: "menu:skills",
 				label: "Skills"
 			},
@@ -4665,11 +4725,11 @@ export class TurbzGame {
 		}
 		for (const node of this.world.spawns) if (node.kind === "node" && Math.hypot(node.x - x, node.y - y) < 40) {
 			const info = { tree: ["Tree · chop for logs", "Resource tree", "Chop logs to build a campfire, cook meals, and purify water.", "Chop logs"], ore: ["Ore vein · mine", "Ore vein", "Mine ore to sell at Crownfall.", "Mine ore"], shroom: ["Mushroom patch · forage", "Mushroom patch", "Forage mushrooms and alchemy spores.", "Forage"] }[node.node];
-			if (info) return { hint: info[0], title: info[1], lines: [info[2], "Gathering destroys it. Another one grows somewhere else."], actions: [{ id: `chop:${node.id}`, label: info[3] }] };
+			if (info) return { hint: `${info[0]} · press E`, title: info[1], lines: [info[2], "Walk up to it and press E. Walking into it does nothing."], actions: [{ id: `chop:${node.id}`, label: info[3] }] };
 		}
 		const tileAt = this.world.tiles[Math.floor(y / 32) * this.world.w + Math.floor(x / 32)];
 		if (tileAt && tileAt.floor === 2) return {
-			hint: "Water · fish here", title: "Water", lines: ["Any water tile can be fished. A bite takes 1-10 seconds."].concat(this.rules === "hardcore" ? ["Hardcore: you can also collect raw water here."] : []),
+			hint: "Water · press E to fish", title: "Water", lines: ["Stand beside the water and press E. A bite takes 1-10 seconds. Walking into the water does not cast."].concat(this.rules === "hardcore" ? ["Hardcore: you can also collect raw water here."] : []),
 			actions: [{ id: "fish", label: "Fish here" }].concat(this.rules === "hardcore" ? [{ id: "water", label: "Collect water" }] : [])
 		};
 		for (const p of POIS) {
@@ -4690,7 +4750,7 @@ export class TurbzGame {
 			if (p.kind === "node") return {
 				hint: `${p.node} node`,
 				title: p.node,
-				lines: ["Gather with Speak, or from this menu."],
+				lines: ["Walk up and press E to gather. It does not harvest when you touch it."],
 				actions: [{
 					id: "gather",
 					label: "Gather"

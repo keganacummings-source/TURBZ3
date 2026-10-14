@@ -173,6 +173,16 @@
   white-space: nowrap;
 }
 
+.interact-fab {
+  position: absolute;
+  left: 50%;
+  bottom: 92px;
+  z-index: 19;
+  min-width: 180px;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
 .veil-chat {
   position: absolute;
   top: 8px;
@@ -348,6 +358,13 @@
   }
   .auto-fab {
     right: 136px;
+  }
+  .interact-fab {
+    left: 50%;
+    bottom: 168px;
+    min-width: 0;
+    width: auto;
+    max-width: calc(100vw - 16px);
   }
   .menu-fab {
     right: 8px;

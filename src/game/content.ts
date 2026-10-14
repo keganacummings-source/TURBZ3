@@ -791,7 +791,7 @@ export const ITEMS: ItemDef[] = [
   { id: "blue_lantern", name: "Blue Lantern", about: "Verdant fungus that glows.", price: 16 },
   { id: "dreamspore", name: "Dreamspore", about: "Alchemy dust. Makes sleep.", price: 20 },
   { id: "embercap", name: "Embercap", about: "A hot cap from the wastes.", price: 18 },
-  { id: "ironroot", name: "Ironroot", about: "Bitter root. Good in a phial.", price: 18 },
+  { id: "ironroot", name: "Ironroot", about: "Bitter root from an ore vein. Good in a phial.", price: 18 },
   { id: "warmth_tonic", name: "Warmth Tonic", about: "Brewed fire. Heals and stabs fire.", price: 0, heal: 70, buff: "fire" },
   { id: "cats_eye", name: "Cat's Eye Draught", about: "Crit drips for a short while.", price: 0, buff: "crit" },
   { id: "ironroot_phial", name: "Ironroot Phial", about: "A bark ward.", price: 0, buff: "ward" },
@@ -805,6 +805,28 @@ export const ITEMS: ItemDef[] = [
 ];
 
 export const ITEM_BY_ID: Record<string, ItemDef> = Object.fromEntries(ITEMS.map((i) => [i.id, i]));
+
+/** Potions and draughts brewed from gathered resources. The crafting menu and autoplay both read this list. */
+export type CraftRecipe = {
+  id: string;
+  name: string;
+  about: string;
+  costs: Record<string, number>;
+  output: string;
+  count: number;
+  skill: SkillId;
+  xp: number;
+};
+
+export const CRAFT_RECIPES: CraftRecipe[] = [
+  { id: "warmth", name: "Warmth Tonic", about: "Dreamspore and embercap. Heals and briefly favors fire.", costs: { dreamspore: 1, embercap: 1 }, output: "warmth_tonic", count: 1, skill: "alchemy", xp: 18 },
+  { id: "ward", name: "Ironroot Phial", about: "Ironroot and a mushroom. A short bark ward.", costs: { ironroot: 1, mushroom: 1 }, output: "ironroot_phial", count: 1, skill: "alchemy", xp: 18 },
+  { id: "eye", name: "Cat's Eye Draught", about: "Dreamspore and a blue lantern. Crit drips for a while.", costs: { dreamspore: 1, blue_lantern: 1 }, output: "cats_eye", count: 1, skill: "alchemy", xp: 18 },
+  { id: "field", name: "Field Potion", about: "Two mushrooms and a pinch of ore. A modest mend.", costs: { mushroom: 2, ore: 1 }, output: "potion", count: 1, skill: "alchemy", xp: 16 },
+  { id: "deep", name: "Deep Bottle", about: "Embercap, dreamspore, and two ore. The good bottle.", costs: { embercap: 1, dreamspore: 1, ore: 2 }, output: "big_potion", count: 1, skill: "alchemy", xp: 22 },
+];
+
+export const CRAFT_BY_ID: Record<string, CraftRecipe> = Object.fromEntries(CRAFT_RECIPES.map((r) => [r.id, r]));
 
 export type QuestDef = {
   id: string;
@@ -846,7 +868,7 @@ export const NPCS: NpcDef[] = [
   { id: "vey", name: "Captain Vey", role: "Citadel guard", female: false, outfit: 1, hair: 1, map: "world", tx: 26, ty: 28, lines: ["THE ASHEN YARD IS LEAKING FIRE AGAIN.", "IF YOU HUNT, HUNT CLEAN. BRING ME COUNTS, NOT STORIES.", "HOLT THINKS A DEBT IS PAID IN BONE. HE IS NOT ALWAYS WRONG."] },
   { id: "orien", name: "Scribe Orien", role: "Ledger scribe", female: true, outfit: 2, hair: 0, map: "world", tx: 34, ty: 28, lines: ["EVERY ARMOR PIECE ROLLS ITS OWN TYPE. MATCH IT TO THE MOVE.", "A FULL SET IS NOT FASHION. IT IS A WEATHER EVENT.", "I CAN TEACH A VERSE, IF YOU HAVE KYO."] },
   { id: "holt", name: "Quartermaster Holt", role: "Stores", female: false, outfit: 3, hair: 2, map: "world", tx: 32, ty: 34, shop: "general", lines: ["POTIONS, JARS, SALT. THE WALLS DO NOT STOCK THEMSELVES.", "BRING ME SALT IF THE LEDGER ASKS. TWO PINCHES."] },
-  { id: "lise", name: "Spore Broker Lise", role: "Alchemist", female: true, outfit: 4, hair: 4, map: "world", tx: 23, ty: 33, shop: "alchemy", lines: ["DREAMSPORE AND EMBERCAP. THAT IS A WARMTH TONIC.", "IRONROOT MAKES A WARD. I JUST HOLD THE FLAME."] },
+  { id: "lise", name: "Spore Broker Lise", role: "Alchemist", female: true, outfit: 4, hair: 4, map: "world", tx: 23, ty: 33, lines: ["BREWING MOVED TO YOUR CRAFTING MENU. OPEN IT AND COMBINE WHAT YOU GATHER.", "DREAMSPORE AND EMBERCAP. THAT IS A WARMTH TONIC. IRONROOT AND A SHROOM MAKE A WARD.", "ORE AND MUSHROOMS MAKE A FIELD POTION. I DO NOT HOLD THE FLAME FOR YOU."] },
   { id: "bram", name: "Fisher Bram", role: "Tide runner", female: false, outfit: 5, hair: 2, map: "world", tx: 63, ty: 34, lines: ["THE REACH IS A ROAD IF YOU RESPECT THE WATER.", "CATCH ME SOMETHING THAT DRINKS. A WATER SPIRIT.", "COOK THE FISH. RAW IS A RUMOR, NOT A MEAL."] },
   { id: "ada", name: "Sister Ada", role: "Chancel sister", female: true, outfit: 0, hair: 4, map: "world", tx: 28, ty: 26, shrine: "light", lines: ["THE CHANCEL OWES THE HUSH A WALK, NOT A SLAUGHTER.", "THE SHRINE WILL HEAL YOU, THEN IT WILL TEST YOU.", "LIGHT IS A WEAPON HERE. DO NOT APOLOGIZE FOR IT."] },
   { id: "brask", name: "Warden Brask", role: "Chancel warden", female: false, outfit: 1, hair: 0, map: "world", tx: 36, ty: 33, lines: ["I WILL WALK YOU INTO A FIGHT AND CALL IT SETTLED.", "WORLD BOSSES DO NOT WAIT ON YOUR STORY. THEY RISE ANYWAY.", "IF YOU DIE, PICK ONE THING. THE VEIL IS GREEDY, NOT THOROUGH."] },

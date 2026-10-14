@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import { authClient } from "@/lib/auth/client";
 import { UserButton } from "@/lib/auth/gates";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
-import { CLASSES, CLASS_RACE, ITEM_BY_ID, RACES, TYPES, equipmentStats, type ClassId, type RaceId, type TypeId } from "@/game/content";
+import { CLASSES, CLASS_RACE, CRAFT_RECIPES, ITEM_BY_ID, RACES, TYPES, equipmentStats, type ClassId, type RaceId, type TypeId } from "@/game/content";
 import { loadCloudSave, writeCloudSave } from "@/game/cloud-client";
 import { bindCloud, cloudReady, ingestCloud, noteArena, noteHardcore, noteHunt, readArenaLocal } from "@/game/account-save";
 import { postGrave } from "@/game/social-client";
@@ -365,7 +365,7 @@ function Title(props: {
         <p className="mt-4 text-dim">
           {hard
             ? "Counters, steps, and rolls can slip. A long roll can clear a blow. Spamming them only chips, and then you trip. Strike when it is your verse."
-            : "Right-click for menus. Walk into a node to harvest it. Click a keeper only when you are already near."}
+            : "Right-click for menus. Walk up to a node and press E to harvest. Click a keeper only when you are already near."}
         </p>
       </div>
     </div>
@@ -541,8 +541,12 @@ function Play({
           ))}
         </div>
       </div>
+      {snap.prompt && !snap.panel && !snap.menu && (
+        <button className="interact-fab px-btn px-btn-kyo" type="button" onClick={() => game?.interact()}>
+          {snap.prompt}
+        </button>
+      )}
       <button
-        className={`auto-fab px-btn ${snap.autoplay ? "px-btn-kyo" : ""}`}
         type="button"
         onClick={() => game?.toggleAutoplay()}
       >
@@ -553,8 +557,9 @@ function Play({
       </button>
       <Stick on={(x, y) => game?.setStick(x, y)} />
       {snap.panel && snap.panel !== "talk" && snap.panel !== "rebirth" && (
-        <Panel title={snap.panel === "moves" ? "Verses · Attacks & Spells" : snap.panel} onClose={() => game?.closePanel()}>
+        <Panel title={snap.panel === "moves" ? "Verses · Attacks & Spells" : snap.panel === "craft" ? "Crafting" : snap.panel} onClose={() => game?.closePanel()}>
           {snap.panel === "survival" && <Survival snap={snap} game={game} />}
+          {snap.panel === "craft" && <Crafting snap={snap} game={game} />}
           {snap.panel === "bag" && <Bag snap={snap} game={game} />}
           {snap.panel === "skills" && <Skills snap={snap} game={game} />}
           {snap.panel === "quests" && (
@@ -584,7 +589,7 @@ function Play({
           {snap.panel === "pause" && (
             <div className="grid gap-2">
               <p>
-                WASD / arrows: move. E: interact or gather. 1–9: cast. B/I: Bag. V: Verses. K: Skills. M: Map. H: Hardcore Survival. Escape: close or pause. Right-click or Menu opens more actions. Chat and search fields stop movement while typing.
+                WASD / arrows: move. E: harvest, fish, or talk. 1–9: cast. B/I: Bag. C: Crafting. V: Verses. K: Skills. M: Map. H: Hardcore Survival. Escape: close or pause. Right-click or Menu opens more actions. Chat and search fields stop movement while typing.
               </p>
               {snap.roomCode && <p className="text-kyo">Lobby {snap.roomCode}</p>}
               <UserButton />
@@ -662,18 +667,10 @@ function Play({
                 )}
               </div>
             )}
-            {snap.talk.shop === "alchemy" && (
-              <div className="mt-3 grid gap-1">
-                <button className="px-btn" onClick={() => game?.brew("warmth")}>
-                  Warmth tonic · spore + embercap
-                </button>
-                <button className="px-btn" onClick={() => game?.brew("ward")}>
-                  Ironroot phial · root + shroom
-                </button>
-                <button className="px-btn" onClick={() => game?.brew("eye")}>
-                  Cat's eye · spore + lantern
-                </button>
-              </div>
+            {snap.talk.id === "lise" && (
+              <button className="px-btn px-btn-kyo mt-2" onClick={() => game?.toggle("craft")}>
+                Open crafting
+              </button>
             )}
             {snap.talk.id === "bram" && (
               <button className="px-btn mt-2" onClick={() => game?.brew("meal")}>
@@ -787,13 +784,45 @@ function Panel({ title, onClose, children }: { title: string; onClose: () => voi
   );
 }
 
+function Crafting({ snap, game }: { snap: ReturnType<typeof getSnap>; game: TurbzGame | null }) {
+  const bag = Object.fromEntries(snap.bag.map((item) => [item.id, item.count]));
+  const count = (id: string) => bag[id] ?? 0;
+  const hide = count("leather");
+  const shroom = count("mushroom");
+  return (
+    <div className="grid gap-3">
+      <p>Combine what you gather into potions. A finished brew raises Alchemy.</p>
+      <p className="text-dim">Mushrooms, ore, and trees do not give anything until you walk up and press E.</p>
+      <div className="grid gap-2">
+        {CRAFT_RECIPES.map((recipe) => {
+          const have = Object.entries(recipe.costs).every(([id, n]) => count(id) >= n);
+          const costs = Object.entries(recipe.costs)
+            .map(([id, n]) => `${ITEM_BY_ID[id]?.name ?? id} ${count(id)}/${n}`)
+            .join(" · ");
+          return (
+            <button key={recipe.id} className="px-btn text-left" disabled={!have} onClick={() => game?.brew(recipe.id)}>
+              {recipe.name}
+              <span className="mt-1 block text-dim">{recipe.about}</span>
+              <span className="mt-1 block text-dim">{costs}</span>
+            </button>
+          );
+        })}
+        <button className="px-btn text-left" disabled={hide < 10 || shroom < 10} onClick={() => game?.craftGear()}>
+          Stitched gear
+          <span className="mt-1 block text-dim">Ten hides and ten mushrooms stitch a piece at your account level.</span>
+          <span className="mt-1 block text-dim">Hide Leather {hide}/10 · Shroom {shroom}/10</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function Bag({ snap, game }: { snap: ReturnType<typeof getSnap>; game: TurbzGame | null }) {
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("all");
   const term = search.trim().toLowerCase();
   const items = snap.bag.filter(item => item.name.toLowerCase().includes(term));
   const gear = snap.gear.filter(piece => `${piece.name} ${piece.slot} ${piece.quality}`.toLowerCase().includes(term)).slice().sort((a, b) => Number(snap.equipped.includes(b.uid)) - Number(snap.equipped.includes(a.uid)) || a.slot.localeCompare(b.slot) || a.name.localeCompare(b.name));
-  const count = (id: string) => snap.bag.find(item => item.id === id)?.count ?? 0;
   return (
     <div className="grid gap-4">
       <div className="inventory-tools">
@@ -824,8 +853,8 @@ function Bag({ snap, game }: { snap: ReturnType<typeof getSnap>; game: TurbzGame
           ))}
         </div>}
         <div className="mt-3 grid gap-2 sm:grid-cols-2">
-          <button className="px-btn" disabled={count("leather") < 10 || count("mushroom") < 10} onClick={() => game?.craftGear()}>
-            Craft · Leather {count("leather")}/10 · Mushroom {count("mushroom")}/10
+          <button className="px-btn" onClick={() => game?.toggle("craft")}>
+            Crafting menu
           </button>
           <button className="px-btn" onClick={() => game?.sellMats()}>
             {snap.rules === "hardcore" ? "Sell hides & ore · Keep survival supplies" : "Sell gathered materials"}
