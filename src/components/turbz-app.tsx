@@ -470,6 +470,12 @@ function Play({
         </p>
         {snap.foe && <p className="text-kyo">{snap.foe}</p>}
         {snap.turn && <p className="text-dim">{snap.turn}</p>}
+        {((snap.spiritParty?.length ?? 0) > 0 || (snap.jarLure ?? 0) > 0) && (
+          <p className="text-dim">
+            Spirits {snap.spiritOut}/{snap.spiritOutMax} out · {snap.spiritParty.length}/{snap.spiritStore} held
+            {snap.jarLure > 0 ? ` · jar ${snap.jarLure}s · ${snap.jarChance}%` : ""}
+          </p>
+        )}
         {snap.autoplay && <p className="text-kyo">Autoplay · {snap.grind || "looking"}</p>}
         {snap.log[0] && <p>{snap.log[0]}</p>}
         {snap.shrine && <p className="text-kyo">{snap.shrine}</p>}
@@ -557,7 +563,7 @@ function Play({
       </button>
       <Stick on={(x, y) => game?.setStick(x, y)} />
       {snap.panel && snap.panel !== "talk" && snap.panel !== "rebirth" && (
-        <Panel title={snap.panel === "moves" ? "Verses · Attacks & Spells" : snap.panel === "craft" ? "Crafting" : snap.panel} onClose={() => game?.closePanel()}>
+        <Panel title={snap.panel === "moves" ? "Verses · Attacks & Spells" : snap.panel === "craft" ? "Crafting" : snap.panel === "ghost" ? "Spirit Party" : snap.panel} onClose={() => game?.closePanel()}>
           {snap.panel === "survival" && <Survival snap={snap} game={game} />}
           {snap.panel === "craft" && <Crafting snap={snap} game={game} />}
           {snap.panel === "bag" && <Bag snap={snap} game={game} />}
@@ -589,7 +595,7 @@ function Play({
           {snap.panel === "pause" && (
             <div className="grid gap-2">
               <p>
-                WASD / arrows: move. E: harvest, fish, or talk. 1–9: cast. B/I: Bag. C: Crafting. V: Verses. K: Skills. M: Map. H: Hardcore Survival. Escape: close or pause. Right-click or Menu opens more actions. Chat and search fields stop movement while typing.
+                WASD / arrows: move. E: harvest, fish, or talk. 1–9: cast. B/I: Bag. C: Crafting. V: Verses. K: Skills. G: Spirit party. M: Map. H: Hardcore Survival. Escape: close or pause. Right-click or Menu opens more actions. A spirit jar raises the chance a slain foe joins you for one minute. Chat and search fields stop movement while typing.
               </p>
               {snap.roomCode && <p className="text-kyo">Lobby {snap.roomCode}</p>}
               <UserButton />
@@ -905,7 +911,13 @@ function Bag({ snap, game }: { snap: ReturnType<typeof getSnap>; game: TurbzGame
 function Skills({ snap, game }: { snap: ReturnType<typeof getSnap>; game: TurbzGame | null }) {
   return (
     <div className="grid gap-3">
-      <p className="text-kyo">{snap.skillPoints} character skill points. Spend them in Attacks & Spells.</p>
+      <p className="text-kyo">{snap.skillPoints} character skill points. Spend them on verses, or on another Ghost Slot.</p>
+      <button className="px-btn text-left" disabled={snap.skillPoints < 1 || snap.ghostSlots >= snap.ghostSlotMax} onClick={() => game?.buyGhostSlot()}>
+        Ghost Slot {snap.ghostSlots}/{snap.ghostSlotMax}
+        <span className="mt-1 block text-dim">
+          1 skill point. Three spirits follow for free. Each slot lets one more follow and fight, up to {3 + snap.ghostSlotMax}.
+        </span>
+      </button>
       <p>
         Account {snap.accountLevel} · {snap.accountXp}/{snap.accountNeed} · {snap.perkPoints} perk points
       </p>
@@ -980,15 +992,102 @@ function Survival({ snap, game }: { snap: ReturnType<typeof getSnap>; game: Turb
 }
 
 function Ghost({ snap, game }: { snap: ReturnType<typeof getSnap>; game: TurbzGame | null }) {
+  const [open, setOpen] = useState<string | null>(null);
+  const [slot, setSlot] = useState(0);
+  const [armed, setArmed] = useState<string | null>(null);
+  const selected = snap.spiritParty.find((s) => s.uid === open) ?? null;
+  const slotted = selected?.known.find((m) => m.id === selected.slots[slot]);
   return (
-    <div className="grid gap-2">
-      <p>{snap.companion}</p>
-      <p className="text-dim">Kills can recruit a spirit. A full party of three keeps the stronger ones. Dead spirits sit out the next turns.</p>
-      {snap.box.map((line, i) => (
-        <button key={`${line}-${i}`} className="px-btn" onClick={() => game?.summonBox(i)}>
-          Call {line}
-        </button>
-      ))}
+    <div className="grid gap-3">
+      <p>
+        {snap.spiritParty.length}/{snap.spiritStore} held · {snap.spiritOut}/{snap.spiritOutMax} following
+      </p>
+      <p className="text-dim">
+        Slain foes sometimes stay. Join chance is {snap.jarChance}%
+        {snap.jarLure > 0 ? ` · spirit jar ${snap.jarLure}s left` : ". A spirit jar adds 40% for one minute"}.
+        The party holds {snap.spiritStore}. Beasts, bosses, and witches do not stay.
+      </p>
+      <button className="px-btn" disabled={snap.jars < 1} onClick={() => game?.useSpiritJar()}>
+        Use spirit jar · {snap.jars} left
+      </button>
+      <button className="px-btn" disabled={snap.skillPoints < 1 || snap.ghostSlots >= snap.ghostSlotMax} onClick={() => game?.buyGhostSlot()}>
+        Ghost Slot {snap.ghostSlots}/{snap.ghostSlotMax} · 1 skill point
+      </button>
+      {!snap.spiritParty.length && <p className="text-dim">No spirits yet. Kill foes. Use a jar first if you want more of them to stay.</p>}
+      <div className="grid gap-2">
+        {snap.spiritParty.map((spirit, i) => (
+          <div key={spirit.uid} className="grid gap-2">
+            <button
+              className={`spirit-row ${open === spirit.uid ? "spirit-row-on" : ""}`}
+              onClick={() => {
+                setOpen(open === spirit.uid ? null : spirit.uid);
+                setSlot(0);
+                setArmed(null);
+              }}
+            >
+              <span className="text-dim">{i + 1}. </span>
+              <span className={typeClass(spirit.type)}>{spirit.name}</span>
+              <span className="spirit-meta">
+                {" "}
+                · Lv {spirit.level} · {TYPES[spirit.type].name} · {spirit.hp}/{spirit.max}
+                {spirit.out ? " · following" : " · benched"}
+                {spirit.hp <= 0 ? " · down" : ""}
+              </span>
+            </button>
+            {selected?.uid === spirit.uid && (
+              <div className="grid gap-2 pl-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <button className="px-btn px-btn-kyo" onClick={() => game?.toggleSpirit(spirit.uid)}>
+                    {spirit.out ? "Bench" : "Call out"}
+                  </button>
+                  <button
+                    className="px-btn"
+                    onClick={() => {
+                      if (armed === spirit.uid) {
+                        game?.dismissSpirit(spirit.uid);
+                        setOpen(null);
+                        setArmed(null);
+                      } else setArmed(spirit.uid);
+                    }}
+                  >
+                    {armed === spirit.uid ? "Confirm dismiss" : "Dismiss"}
+                  </button>
+                </div>
+                <p className="text-dim">Tap a slot, then a known verse. “For you” heals or buffs you.</p>
+                {spirit.slots.map((id, n) => {
+                  const move = spirit.known.find((m) => m.id === id);
+                  return (
+                    <button key={`${spirit.uid}-slot-${n}`} className={`spirit-row ${slot === n ? "spirit-row-on" : ""}`} onClick={() => setSlot(n)}>
+                      <span className="text-dim">Slot {n + 1}</span>
+                      <span className={move ? typeClass(move.type) : ""}> · {move?.name ?? "Empty"}</span>
+                      {move?.ally && <span className="text-dim"> · for you</span>}
+                    </button>
+                  );
+                })}
+                {slotted && <p className="text-dim">{slotted.about}</p>}
+                {spirit.known.map((move) => {
+                  const used = spirit.slots.indexOf(move.id);
+                  return (
+                    <button
+                      key={move.id}
+                      className={`spirit-row ${used === slot ? "spirit-row-on" : ""}`}
+                      onClick={() => game?.setSpiritMove(spirit.uid, slot, move.id)}
+                    >
+                      <span className={typeClass(move.type)}>{move.name}</span>
+                      <span className="spirit-meta">
+                        {" "}
+                        · {TYPES[move.type].name}
+                        {move.ally ? " · for you" : " · foe"}
+                        {used >= 0 ? ` · slot ${used + 1}` : ""}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

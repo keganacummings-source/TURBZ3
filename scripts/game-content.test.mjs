@@ -37,6 +37,26 @@ test("ten playable classes have working starter abilities and distinct sprites",
   assert.equal(new Set(slots).size, 10);
 });
 
+test("spirit movesets stay within the party rules and favor their type", () => {
+  const rng = content.mulberry32(7);
+  for (const type of ["fire", "water", "spirit", "void", "earth"]) {
+    for (let rarity = 0; rarity < 5; rarity++) {
+      const kit = content.rollSpiritMoves(rng, type, rarity);
+      assert.ok(kit.known.length >= 3 && kit.known.length <= 10);
+      assert.equal(kit.slots.length, 3);
+      assert.equal(new Set(kit.known).size, kit.known.length);
+      assert.equal(new Set(kit.slots).size, 3);
+      for (const id of kit.slots) assert.ok(kit.known.includes(id));
+      assert.ok(kit.known.some((id) => content.isAllyMove(content.spiritMove(id))));
+      const same = kit.known.filter((id) => content.spiritMove(id).type === type).length;
+      assert.ok(same >= 1, `${type} kit should include its own type`);
+    }
+  }
+  assert.equal(content.SPIRIT_STORE_MAX, 20);
+  assert.equal(content.SPIRIT_FOLLOW_BASE, 3);
+  assert.equal(content.ITEM_BY_ID.ghost_jar.name, "Spirit Jar");
+});
+
 test("legacy races map to valid classes and required gameplay data is populated", () => {
   for (const r of content.RACES) assert.ok(content.CLASS_BY_ID[content.LEGACY_CLASS[r.id]]);
   for (const id of ["adventuring", "physical", "magic", "catching", "hunting", "trading"]) {

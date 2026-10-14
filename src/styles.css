@@ -232,9 +232,26 @@
   padding: 6px 8px;
 }
 
-.grave-row-on {
+.spirit-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 2px solid var(--color-bone);
+  background: var(--color-ink);
+  color: var(--color-bone);
+  padding: 8px 10px;
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.spirit-row-on {
   border-color: var(--color-kyo);
   box-shadow: 3px 3px 0 var(--color-blood);
+}
+
+.spirit-meta {
+  font-size: 18px;
+  line-height: 1.2;
 }
 
 .panel-drawer {

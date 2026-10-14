@@ -105,6 +105,8 @@ export type Move = {
   react?: ReactKind;
   /** Base slip chance for counters, steps, and rolls. Fatigue stacks on top. */
   fail?: number;
+  /** Spirit-only verse. It lands on the witch, never the foe. */
+  ally?: boolean;
 };
 
 export type Tactic = "strike" | "blink" | "ward" | "lunge" | "heavy" | "channel" | "heal" | "roll";
@@ -231,6 +233,86 @@ export const MOVES: Move[] = [
 ];
 
 export const MOVE_BY_ID: Record<string, Move> = Object.fromEntries(MOVES.map((m) => [m.id, m]));
+
+/** Roster size, default followers, and how many extra follower slots skill points can buy. */
+export const SPIRIT_STORE_MAX = 20;
+export const SPIRIT_FOLLOW_BASE = 3;
+export const SPIRIT_SLOT_MAX = 5;
+export const SPIRIT_KNOWN_MAX = 10;
+export const SPIRIT_EQUIPPED = 3;
+
+/** Verses only a bound spirit can cast. They mend, ward, or buff the witch. */
+export const SPIRIT_SUPPORT: Move[] = [
+  { id: "sp_mend", name: "Jar Mend", type: "light", power: 26, accuracy: 100, crit: 0, priority: 2, effect: "ally_heal", anim: ["spiral", "shield"], range: 40, about: "Knits the witch who carries the jar.", tactic: "heal", react: "heal", ally: true },
+  { id: "sp_tide", name: "Salt Hymn", type: "water", power: 22, accuracy: 100, crit: 0, priority: 2, effect: "ally_heal", anim: ["rain", "shield"], range: 40, about: "Brine that closes your cuts.", tactic: "heal", react: "heal", ally: true },
+  { id: "sp_ember", name: "Ember Pulse", type: "fire", power: 16, accuracy: 100, crit: 0, priority: 2, effect: "ally_heal", anim: ["spark", "pulse"], range: 40, about: "Warmth poured into you.", tactic: "heal", react: "heal", ally: true },
+  { id: "sp_vein", name: "Shared Vein", type: "ghoul", power: 18, accuracy: 100, crit: 0, priority: 1, effect: "ally_heal", anim: ["orbit", "beam"], range: 40, about: "A sip returned to the binder.", tactic: "heal", react: "heal", ally: true },
+  { id: "sp_ward", name: "Veil Ward", type: "void", power: 0, accuracy: 100, crit: 0, priority: 3, effect: "ally_ward", anim: ["orbit", "shield"], range: 40, about: "A veil on you. The next blows land lighter.", tactic: "ward", react: "guard", ally: true },
+  { id: "sp_calm", name: "Frost Calm", type: "ice", power: 0, accuracy: 100, crit: 0, priority: 2, effect: "ally_ward", anim: ["prism", "shield"], range: 40, about: "Ice on the shoulders. Damage dips.", tactic: "ward", react: "guard", ally: true },
+  { id: "sp_aegis", name: "Bone Aegis", type: "normal", power: 0, accuracy: 100, crit: 0, priority: 3, effect: "ally_shield", anim: ["shield", "burst"], range: 40, about: "Raises a bone shield on you.", tactic: "ward", react: "guard", ally: true },
+  { id: "sp_root", name: "Root Guard", type: "earth", power: 0, accuracy: 100, crit: 0, priority: 2, effect: "ally_shield", anim: ["spiral", "shield"], range: 40, about: "Roots brace your stance.", tactic: "ward", react: "guard", ally: true },
+  { id: "sp_might", name: "Grave Might", type: "fire", power: 0, accuracy: 100, crit: 0, priority: 2, effect: "ally_might", anim: ["spark", "burst"], range: 40, about: "Your strikes hit harder for a short while.", tactic: "ward", ally: true },
+  { id: "sp_chorus", name: "Chorus Bless", type: "spirit", power: 0, accuracy: 100, crit: 0, priority: 2, effect: "ally_might", anim: ["orbit", "pulse"], range: 40, about: "The dead sing your blade louder.", tactic: "ward", ally: true },
+  { id: "sp_focus", name: "Wisp Focus", type: "light", power: 0, accuracy: 100, crit: 0, priority: 2, effect: "ally_crit", anim: ["prism", "spark"], range: 40, about: "Sharpens your critical eye.", tactic: "ward", ally: true },
+  { id: "sp_heart", name: "Storm Heart", type: "electric", power: 0, accuracy: 100, crit: 0, priority: 2, effect: "ally_crit", anim: ["spark", "beam"], range: 40, about: "Lightning in the wrist.", tactic: "ward", ally: true },
+  { id: "sp_haste", name: "Ghost Haste", type: "air", power: 0, accuracy: 100, crit: 0, priority: 3, effect: "ally_haste", anim: ["spiral", "slash"], range: 40, about: "Trims the wait on your verses.", tactic: "ward", ally: true },
+  { id: "sp_cleanse", name: "Ash Cleanse", type: "spirit", power: 0, accuracy: 100, crit: 0, priority: 3, effect: "ally_cleanse", anim: ["orbit", "pulse"], range: 40, about: "Burns a status off you.", tactic: "heal", ally: true },
+];
+
+export const SPIRIT_MOVE_BY_ID: Record<string, Move> = Object.fromEntries(SPIRIT_SUPPORT.map((m) => [m.id, m]));
+
+export function spiritMove(id: string): Move | undefined {
+  return MOVE_BY_ID[id] ?? SPIRIT_MOVE_BY_ID[id];
+}
+
+export function isAllyMove(m: Move): boolean {
+  return !!m.ally || m.effect.startsWith("ally_");
+}
+
+function weightedMove(rng: Rng, pool: { m: Move; w: number }[]): Move | null {
+  const total = pool.reduce((sum, row) => sum + row.w, 0);
+  if (total <= 0 || pool.length === 0) return null;
+  let roll = rng() * total;
+  for (const row of pool) {
+    roll -= row.w;
+    if (roll <= 0) return row.m;
+  }
+  return pool[pool.length - 1]!.m;
+}
+
+/** A type-biased moveset: at most 10 known, exactly 3 slotted, including one verse for the witch. */
+export function rollSpiritMoves(rng: Rng, type: TypeId, rarity = 0): { known: string[]; slots: string[] } {
+  const want = Math.min(SPIRIT_KNOWN_MAX, 6 + Math.min(4, Math.max(0, rarity)) + (rng() < 0.35 ? 1 : 0));
+  const pool: { m: Move; w: number }[] = [];
+  for (const m of MOVES) {
+    const w = m.type === type ? 6 : m.type === "spirit" || m.type === "normal" ? 2 : 1;
+    pool.push({ m, w });
+  }
+  for (const m of SPIRIT_SUPPORT) {
+    const w = m.type === type ? 7 : m.type === "spirit" || m.type === "light" ? 4 : 2;
+    pool.push({ m, w });
+  }
+  const known: Move[] = [];
+  const take = (m: Move | null) => {
+    if (!m || known.some((row) => row.id === m.id)) return;
+    known.push(m);
+    const i = pool.findIndex((row) => row.m.id === m.id);
+    if (i >= 0) pool.splice(i, 1);
+  };
+  take(weightedMove(rng, pool.filter((row) => isAllyMove(row.m))));
+  while (known.length < want && pool.length) take(weightedMove(rng, pool));
+  const ally = known.find((m) => isAllyMove(m));
+  const hits = known.filter((m) => !isAllyMove(m));
+  const slots: string[] = [];
+  if (hits[0]) slots.push(hits[0].id);
+  if (hits[1]) slots.push(hits[1].id);
+  if (ally) slots.push(ally.id);
+  for (const m of known) {
+    if (slots.length >= SPIRIT_EQUIPPED) break;
+    if (!slots.includes(m.id)) slots.push(m.id);
+  }
+  return { known: known.map((m) => m.id).slice(0, SPIRIT_KNOWN_MAX), slots: slots.slice(0, SPIRIT_EQUIPPED) };
+}
 
 const MELEE_IDS = new Set(["cinder", "grin", "thorn", "bite", "rattle", "measured", "brine"]);
 const SPELL_IDS = new Set(["dirge", "storm", "howl", "quake", "whiteout", "flash", "hex", "shroud", "dawn", "creep", "marrow", "vine", "ember", "tide"]);
@@ -784,7 +866,7 @@ export const ITEMS: ItemDef[] = [
   { id: "drinking_water", name: "Drinking Water", about: "Purified on a campfire. Restores 50 thirst.", price: 0 },
   { id: "potion", name: "Potion", about: "Mends a modest wound.", price: 18, heal: 45 },
   { id: "big_potion", name: "Big Potion", about: "The good bottle.", price: 48, heal: 110 },
-  { id: "ghost_jar", name: "Ghost Jar", about: "Catches a weakened spirit.", price: 26 },
+  { id: "ghost_jar", name: "Spirit Jar", about: "Crack it. For one minute, slain foes are much likelier to stay as spirits.", price: 26 },
   { id: "cleanse_salt", name: "Cleanse Salt", about: "Clears a hex. Quest salt.", price: 14 },
   { id: "spirit_candy", name: "Spirit Candy", about: "A rush of spirit.", price: 22, heal: 30 },
   { id: "smoke_bomb", name: "Smoke Bomb", about: "Step out of a fight.", price: 20 },

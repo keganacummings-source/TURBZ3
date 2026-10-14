@@ -18,6 +18,11 @@ import {
   MONSTERS,
   MOVE_BY_ID,
   MOVES,
+  SPIRIT_FOLLOW_BASE,
+  SPIRIT_SLOT_MAX,
+  SPIRIT_STORE_MAX,
+  SPIRIT_KNOWN_MAX,
+  SPIRIT_EQUIPPED,
   NPCS,
   POIS,
   NODE_RESPAWN_SECONDS,
@@ -47,6 +52,9 @@ import {
   rangedStyle,
   rollGear,
   rollGhostLook,
+  rollSpiritMoves,
+  spiritMove,
+  isAllyMove,
   rollInnate,
   scaleTile,
   skillLine,
@@ -138,6 +146,26 @@ export type Snap = {
   shrine: string;
   companion: string;
   box: string[];
+  spiritParty: {
+    uid: string;
+    name: string;
+    type: TypeId;
+    level: number;
+    rarity: number;
+    hp: number;
+    max: number;
+    out: boolean;
+    known: { id: string; name: string; type: TypeId; about: string; ally: boolean }[];
+    slots: string[];
+  }[];
+  spiritStore: number;
+  spiritOut: number;
+  spiritOutMax: number;
+  jarLure: number;
+  jarChance: number;
+  ghostSlots: number;
+  ghostSlotMax: number;
+  jars: number;
   known: { id: string; name: string; type: TypeId }[];
   stash: string[];
   selected: string | null;
@@ -184,7 +212,8 @@ type Mob = {
 };
 type Spirit = {
   uid: string; species: string; name: string; type: TypeId; template: number; level: number; rarity: number;
-  look: GhostLook; move: string; hp: number; max: number; speed: number;
+  look: GhostLook; move: string; known: string[]; slots: string[]; hp: number; max: number; speed: number;
+  out?: boolean; cast?: number;
 };
 type GhostPet = { species: string; level: number; rarity: number; look?: GhostLook; move?: string; name?: string; type?: TypeId; template?: number; hp?: number; max?: number; speed?: number };
 type SkillState = Record<SkillId, { level: number; xp: number }>;
@@ -196,7 +225,7 @@ type Save = {
   companion: GhostPet | null; box: GhostPet[]; bosses: Record<string, number>; talked: string[]; bestShrine: number;
   stash: EnchantRoll[]; saltTurned: number; accountLevel: number; accountXp: number; perkPoints: number;
   perks: Record<string, number>; lastTavern: string; innate: string[]; party: string[]; found: Record<string, Slot[]>;
-  spirits?: Spirit[]; accountScore?: number; evilMark?: number; deathBanked?: boolean;
+  spirits?: Spirit[]; ghostSlots?: number; jarLure?: number; accountScore?: number; evilMark?: number; deathBanked?: boolean;
 };
 type Part = { x: number; y: number; vx: number; vy: number; life: number; max: number; color: string; size: number; kind: string };
 type Flo = { x: number; y: number; text: string; life: number; color: string };
@@ -246,6 +275,15 @@ const emptySnap = (): Snap => ({
 	shrine: "",
 	companion: "No spirit",
 	box: [],
+	spiritParty: [],
+	spiritStore: 20,
+	spiritOut: 0,
+	spiritOutMax: 3,
+	jarLure: 0,
+	jarChance: 12,
+	ghostSlots: 0,
+	ghostSlotMax: 5,
+	jars: 0,
 	known: [],
 	stash: [],
 	selected: null,
@@ -315,6 +353,7 @@ export class TurbzGame {
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	[k: string]: any;
 	mates: { x: number; y: number; swing: number }[] = [];
+	mateBy: Record<string, { x: number; y: number; swing: number }> = {};
 	mateCd: Record<string, number> = {};
 	mateDirections: Record<string, ActorDirection> = {};
 	fightGap = 0;
@@ -654,6 +693,8 @@ export class TurbzGame {
 			party: [],
 			found: {},
 			spirits: [],
+			ghostSlots: 0,
+			jarLure: 0,
 			accountScore: 0,
 			evilMark: 0,
 			deathBanked: false
@@ -984,10 +1025,14 @@ export class TurbzGame {
 		}
 		this.cam.x += (save.x - this.cam.x) * Math.min(1, dt * 8);
 		this.cam.y += (save.y - this.cam.y) * Math.min(1, dt * 8);
-		for (const id of Object.keys(this.cds)) this.cds[id] = Math.max(0, (this.cds[id] ?? 0) - dt);
+		for (const id of Object.keys(this.cds)) {
+			const haste = this.buff.t > 0 ? 1 + Math.max(0, this.buff.haste ?? 0) : 1;
+			this.cds[id] = Math.max(0, (this.cds[id] ?? 0) - dt * haste);
+		}
 		this.status.forEach((s) => s.t -= dt);
 		this.status = this.status.filter((s) => s.t > 0);
 		if (this.buff.t > 0) this.buff.t -= dt;
+		if (save.jarLure > 0) save.jarLure = Math.max(0, save.jarLure - dt);
 		this.hurt = Math.max(0, this.hurt - dt * 3);
 		this.attackT = Math.max(0, this.attackT - dt * 3);
 		if (this.status.find((s) => s.id === "burn")) this.hurtSelf(8 * dt, "burn");
@@ -1210,7 +1255,12 @@ export class TurbzGame {
 			return far ? this.walkTo(far.x, far.y) : false;
 		}
 		if (id === "catching") {
-			if ((save.bag.ghost_jar ?? 0) <= 0) {
+			if ((save.jarLure ?? 0) < 8 && (save.bag.ghost_jar ?? 0) > 0) {
+				this.useSpiritJar();
+				this.path = [];
+				return true;
+			}
+			if ((save.bag.ghost_jar ?? 0) <= 0 && (save.jarLure ?? 0) <= 0) {
 				const holt = NPCS.find((n) => n.id === "holt");
 				if (!holt) return false;
 				const at = scaleTile(holt.tx, holt.ty);
@@ -1225,15 +1275,9 @@ export class TurbzGame {
 				}
 				return this.walkTo(x, y);
 			}
-			const soft = this.mobs.find((m) => m.alive && !m.boss && m.hp / m.max <= .5);
-			if (soft && Math.hypot(soft.x - save.x, soft.y - save.y) < 70) {
-				this.catchSpirit();
-				this.path = [];
-				return true;
-			}
-			const foe = soft ?? this.nearestMob(save.x, save.y, 2400);
+			const foe = this.nearestMob(save.x, save.y, 2400);
 			if (!foe) return false;
-			if (Math.hypot(foe.x - save.x, foe.y - save.y) < 64) {
+			if (Math.hypot(foe.x - save.x, foe.y - save.y) < 70) {
 				this.path = [];
 				return true;
 			}
@@ -1725,11 +1769,12 @@ export class TurbzGame {
 			return;
 		}
 		const gearStab = pure ? 1 : this.stab(move.type);
-		const might = 1 + this.chan("might") / 100;
+		const buffOn = this.buff.t > 0;
+		const might = 1 + this.chan("might") / 100 + (buffOn ? (this.buff.might ?? 0) : 0);
 		const hunt = 1 + Math.min(.4, (save.skills.hunting.level - 1) * .004);
 		const boss = mob.boss ? 1 + this.chan("boss_bane") / 100 : 1;
 		const gloom = this.status.some((s) => s.id === "gloom") ? .8 : 1;
-		const critChance = move.crit + this.chan("crit_edge") + this.buff.crit;
+		const critChance = move.crit + this.chan("crit_edge") + (buffOn ? this.buff.crit : 0);
 		const crit = Math.random() * 100 < critChance;
 		const phys = form === "spell" ? 1 : 1 + (save.skills.physical.level - 1) * (form === "melee" ? .02 : .015);
 		const mag = form === "spell" ? 1.45 * (1 + (save.skills.magic.level - 1) * .025) : 1;
@@ -1862,36 +1907,72 @@ export class TurbzGame {
 	tryRecruit(mob: Mob) {
 		const save = this.save;
 		if (!save || mob.animal || mob.boss || mob.witch || mob.id.startsWith("shrine") || mob.master) return;
-		const catchLv = save.skills.catching?.level ?? 1;
-		const chance = 0.1 + Math.min(0.22, (catchLv - 1) * 0.004) + this.chan("catch_boost") / 220 + mob.rarity * 0.03;
-		if (Math.random() > chance) return;
-		const spirit = this.spiritFrom(mob);
-		save.spirits = save.spirits ?? [];
-		if (save.spirits.length < 3) {
-			save.spirits.push(spirit);
-			this.say(`${spirit.name} joins the hunt.`);
-		} else {
-			let weak = 0;
-			for (let i = 1; i < save.spirits.length; i++) if (this.spiritPower(save.spirits[i]!) < this.spiritPower(save.spirits[weak]!)) weak = i;
-			if (this.spiritPower(spirit) <= this.spiritPower(save.spirits[weak]!)) {
-				this.say(`${spirit.name} almost stayed. The party is stronger.`);
-				return;
-			}
-			const gone = save.spirits[weak]!;
-			save.spirits[weak] = spirit;
-			this.say(`${spirit.name} replaces ${gone.name}.`);
+		const chance = this.recruitChance(mob);
+		if (Math.random() > chance) {
+			if ((save.jarLure ?? 0) > 0) this.float(mob.x, mob.y - 28, "FADES", "#c9a6e8");
+			return;
 		}
+		save.spirits = save.spirits ?? [];
+		if (save.spirits.length >= SPIRIT_STORE_MAX) {
+			this.say(`${mob.name} wanted to stay. The spirit party is full (${SPIRIT_STORE_MAX}). Dismiss one.`);
+			return;
+		}
+		const spirit = this.spiritFrom(mob);
+		spirit.out = this.outCount() < this.spiritFollowMax();
+		save.spirits.push(spirit);
+		this.say(spirit.out ? `${spirit.name} stays, and follows.` : `${spirit.name} joins the spirit party. Call them out when a slot is free.`);
 		this.gainSkill("catching", 16);
 		save.catches[mob.type] = (save.catches[mob.type] ?? 0) + 1;
 		this.noteCatch(mob);
+		this.tone(600, .1, "triangle");
+	}
+	recruitChance(mob?: { rarity?: number } | null) {
+		const save = this.save;
+		if (!save) return 0.12;
+		const catchLv = save.skills.catching?.level ?? 1;
+		let chance = 0.12 + Math.min(0.18, Math.max(0, catchLv - 1) * 0.004) + this.chan("catch_boost") / 220 + (mob?.rarity ?? 0) * 0.03;
+		if ((save.jarLure ?? 0) > 0) chance += 0.4;
+		return Math.min(0.92, chance);
+	}
+	spiritFollowMax() {
+		const extra = Math.max(0, Math.min(SPIRIT_SLOT_MAX, this.save?.ghostSlots ?? 0));
+		return SPIRIT_FOLLOW_BASE + extra;
+	}
+	outCount() {
+		return (this.save?.spirits ?? []).filter((s) => s.out).length;
+	}
+	outSpirits() {
+		return (this.save?.spirits ?? []).filter((s) => s.out);
 	}
 	spiritFrom(mob: Mob): Spirit {
-		const look = mob.look ?? rollGhostLook(mulberry32((Math.random() * 1e9 | 0) || 1), mob.rarity, mob.move, "hunt");
+		const rng = mulberry32((Math.random() * 1e9 | 0) || 1);
+		const kit = rollSpiritMoves(rng, mob.type, mob.rarity);
+		const look = mob.look ?? rollGhostLook(rng, mob.rarity, kit.slots[0] ?? mob.move, "hunt");
+		look.move = kit.slots[0] ?? look.move;
 		const max = Math.max(18, Math.floor(mob.max * 0.72));
 		return {
 			uid: nextUid(), species: mob.species, name: mob.name, type: mob.type, template: mob.template,
-			level: mob.level, rarity: mob.rarity, look, move: mob.move, hp: max, max, speed: Math.max(6, (mob.speed ?? 10) - 1)
+			level: mob.level, rarity: mob.rarity, look, move: kit.slots[0] ?? mob.move,
+			known: kit.known, slots: kit.slots, hp: max, max, speed: Math.max(6, (mob.speed ?? 10) - 1), out: false, cast: 0
 		};
+	}
+	fillSpirit(s: Spirit) {
+		const known = Array.isArray(s.known) ? s.known.filter((id) => spiritMove(id)) : [];
+		const slots = Array.isArray(s.slots) ? s.slots.filter((id) => spiritMove(id)) : [];
+		if (known.length < SPIRIT_EQUIPPED || slots.length < 1) {
+			const kit = rollSpiritMoves(mulberry32(((s.level * 97) ^ (s.rarity * 13) ^ (s.name?.length ?? 3) * 17) >>> 0 || 1), s.type, s.rarity);
+			for (const id of kit.known) if (!known.includes(id) && known.length < SPIRIT_KNOWN_MAX) known.push(id);
+			if (!slots.length) slots.push(...kit.slots);
+		}
+		s.known = [...new Set(known)].slice(0, SPIRIT_KNOWN_MAX);
+		s.slots = [...new Set(slots.filter((id) => s.known.includes(id)))].slice(0, SPIRIT_EQUIPPED);
+		for (const id of s.known) {
+			if (s.slots.length >= SPIRIT_EQUIPPED) break;
+			if (!s.slots.includes(id)) s.slots.push(id);
+		}
+		s.move = s.slots[0] ?? s.move ?? s.known[0] ?? "measured";
+		if (s.look) s.look.move = s.move;
+		if (s.out !== true) s.out = !!s.out;
 	}
 	spiritPower(s: Spirit) {
 		return s.level * 10 + s.rarity * 12 + s.speed + Math.floor(s.hp);
@@ -2167,7 +2248,7 @@ export class TurbzGame {
 		if (m.party) dmg *= 0.58;
 		if (m.summoner) dmg *= 0.82;
 		if (m.dungeonBoss) dmg *= .6;
-		dmg *= 1 - Math.min(.45, this.chan("ward") / 160 + this.buff.ward);
+		dmg *= 1 - Math.min(.45, this.chan("ward") / 160 + (this.buff.t > 0 ? this.buff.ward : 0));
 		if (this.status.some((s) => s.id === "shell")) dmg *= .7;
 		if (Math.random() * 100 < this.chan("echo_guard")) {
 			this.float(save.x, save.y - 36, "ECHO", "#6a4cff");
@@ -2303,7 +2384,10 @@ export class TurbzGame {
 		if (this.rules === "hardcore") save.bag.trail_ration = 2;
 		save.party = [];
 		save.companion = null;
+		save.box = [];
 		save.spirits = [];
+		save.ghostSlots = 0;
+		save.jarLure = 0;
 		save.deathBanked = false;
 		const known = [...CLASS_BY_ID[classId].starterMoves];
 		save.innate = known;
@@ -2458,7 +2542,7 @@ export class TurbzGame {
 		const you = this.playerSpeed();
 		const top = foes[0]?.speed ?? 0;
 		const q: TurnStep[] = [];
-		const spirits = (save.spirits ?? []).filter((s) => s.hp > 0);
+		const spirits = this.outSpirits().filter((s) => s.hp > 0);
 		const pushYou = () => {
 			q.push({ side: "you", id: "you" });
 			for (const s of spirits) q.push({ side: "spirit", id: s.uid });
@@ -2498,7 +2582,7 @@ export class TurbzGame {
 				while (this.turnQ[0]?.side === "spirit") this.turnQ.shift();
 			}
 		} else if (step.side === "spirit") {
-			const spirit = (save.spirits ?? []).find((s) => s.uid === step.id && s.hp > 0);
+			const spirit = this.outSpirits().find((s) => s.uid === step.id && s.hp > 0);
 			if (spirit) this.spiritTurn(spirit);
 		} else {
 			const mob = this.mobs.find((m) => m.id === step.id && m.alive);
@@ -2512,23 +2596,87 @@ export class TurbzGame {
 	}
 	spiritTurn(spirit: Spirit) {
 		const save = this.save!;
-		const slot = (save.spirits ?? []).indexOf(spirit);
-		const at = this.mates[slot] ?? { x: save.x - 20, y: save.y, swing: 0 };
+		const at = this.mateBy[spirit.uid] ?? { x: save.x - 20, y: save.y, swing: 0 };
+		this.mateBy[spirit.uid] = at;
 		const foe = this.fightTarget();
 		if (!foe) return;
-		const heal = save.hp < this.maxHp() * 0.42 ? MOVES.find((m) => m.type === spirit.type && moveTactic(m) === "heal") : null;
-		if (heal) {
-			const n = 12 + spirit.level;
-			save.hp = Math.min(this.maxHp(), save.hp + n);
-			this.float(save.x, save.y - 50, `+${n}`, "#9ad8c8");
-			this.playMoveFx(heal, at.x, at.y - 12, save.x, save.y - 16);
+		const slots = (spirit.slots ?? []).map((id) => spiritMove(id)).filter((m) => !!m);
+		if (!slots.length) return;
+		const aid = this.spiritWantsAid(slots);
+		const hits = slots.filter((m) => !isAllyMove(m));
+		const move = aid ?? (hits.length ? hits[(spirit.cast ?? 0) % hits.length] : slots[(spirit.cast ?? 0) % slots.length]);
+		spirit.cast = (spirit.cast ?? 0) + 1;
+		at.swing = 1;
+		if (!move) return;
+		if (isAllyMove(move)) {
+			this.spiritAid(spirit, move, at);
 			return;
 		}
-		const move = MOVE_BY_ID[spirit.move] ?? MOVE_BY_ID[spirit.look.move] ?? MOVES.find((m) => m.type === spirit.type) ?? MOVES[0]!;
-		at.swing = 1;
-		this.mates[slot] = at;
 		this.playMoveFx(move, at.x, at.y - 12, foe.x, foe.y - 12);
 		this.resolveHit(move, foe, true, 0.75 + spirit.rarity * 0.12);
+	}
+	spiritWantsAid(slots) {
+		const save = this.save;
+		if (!save) return null;
+		const hp = save.hp / Math.max(1, this.maxHp());
+		const heal = slots.find((m) => isAllyMove(m) && m.effect === "ally_heal");
+		if (heal && hp < 0.62) return heal;
+		const clean = slots.find((m) => isAllyMove(m) && m.effect === "ally_cleanse");
+		if (clean && this.status.length) return clean;
+		if (hp < 0.85) {
+			const shield = slots.find((m) => isAllyMove(m) && m.effect === "ally_shield");
+			if (shield && this.shield < 10) return shield;
+			const ward = slots.find((m) => isAllyMove(m) && m.effect === "ally_ward");
+			if (ward && (this.buff.t <= 0 || (this.buff.ward ?? 0) < 0.12)) return ward;
+		}
+		const might = slots.find((m) => isAllyMove(m) && m.effect === "ally_might");
+		if (might && (this.buff.t <= 0 || (this.buff.might ?? 0) < 0.05)) return might;
+		const crit = slots.find((m) => isAllyMove(m) && m.effect === "ally_crit");
+		if (crit && (this.buff.t <= 0 || (this.buff.crit ?? 0) < 8)) return crit;
+		const haste = slots.find((m) => isAllyMove(m) && m.effect === "ally_haste");
+		if (haste && (this.buff.t <= 0 || (this.buff.haste ?? 0) < 0.1)) return haste;
+		return null;
+	}
+	mergeBuff(partial) {
+		const b = this.buff ?? { crit: 0, ward: 0, t: 0 };
+		this.buff = {
+			crit: partial.crit ?? b.crit ?? 0,
+			ward: partial.ward ?? b.ward ?? 0,
+			might: partial.might ?? b.might ?? 0,
+			haste: partial.haste ?? b.haste ?? 0,
+			type: Object.hasOwn(partial, "type") ? partial.type : b.type,
+			t: Math.max(b.t > 0 ? b.t : 0, partial.t ?? 0)
+		};
+	}
+	spiritAid(spirit, move, at) {
+		const save = this.save;
+		if (!save) return;
+		const n = Math.max(6, Math.floor(8 + move.power * 0.45 + spirit.level * 0.8));
+		if (move.effect === "ally_heal") {
+			save.hp = Math.min(this.maxHp(), save.hp + n);
+			this.float(save.x, save.y - 50, `+${n}`, "#9ad8c8");
+		} else if (move.effect === "ally_cleanse") {
+			this.status = [];
+			this.float(save.x, save.y - 50, "CLEAN", "#fff1a8");
+		} else if (move.effect === "ally_ward") {
+			this.mergeBuff({ ward: Math.max(this.buff.ward ?? 0, 0.22), t: 14 });
+			this.wardT = Math.max(this.wardT ?? 0, 8);
+			this.float(save.x, save.y - 50, "WARD", "#9ad0ff");
+		} else if (move.effect === "ally_shield") {
+			this.shield = Math.min(80, (this.shield ?? 0) + 12 + spirit.level);
+			this.wardT = Math.max(this.wardT ?? 0, 6);
+			this.float(save.x, save.y - 50, "AEGIS", "#f0e2c8");
+		} else if (move.effect === "ally_might") {
+			this.mergeBuff({ might: Math.max(this.buff.might ?? 0, 0.28), t: 14 });
+			this.float(save.x, save.y - 50, "MIGHT", "#e25a32");
+		} else if (move.effect === "ally_crit") {
+			this.mergeBuff({ crit: Math.max(this.buff.crit ?? 0, 18), t: 14 });
+			this.float(save.x, save.y - 50, "FOCUS", "#f2d43a");
+		} else if (move.effect === "ally_haste") {
+			this.mergeBuff({ haste: Math.max(this.buff.haste ?? 0, 0.45), t: 12 });
+			this.float(save.x, save.y - 50, "HASTE", "#9ad8c8");
+		}
+		this.playMoveFx(move, at.x, at.y - 12, save.x, save.y - 16);
 	}
 	foeTurn(m: Mob) {
 		const save = this.save!;
@@ -2545,11 +2693,10 @@ export class TurbzGame {
 		}
 		m.cd = (form === "spell" ? 1.05 : form === "ranged" ? 0.72 : 0.48) * (m.boss || m.witch ? 0.85 : 1);
 		m.swing += 1;
-		const spirits = (save.spirits ?? []).filter((s) => s.hp > 0);
+		const spirits = this.outSpirits().filter((s) => s.hp > 0);
 		if (spirits.length && Math.random() < 0.28) {
 			const spirit = spirits[Math.floor(Math.random() * spirits.length)]!;
-			const slot = (save.spirits ?? []).indexOf(spirit);
-			const at = this.mates[slot] ?? { x: save.x, y: save.y, swing: 0 };
+			const at = this.mateBy[spirit.uid] ?? { x: save.x, y: save.y, swing: 0 };
 			this.playMoveFx(move, m.x, m.y - 16, at.x, at.y - 10);
 			const dmg = Math.max(4, Math.floor(6 + m.level * 1.4 + move.power * 0.08));
 			spirit.hp -= dmg;
@@ -2566,11 +2713,12 @@ export class TurbzGame {
 	tickSpirits(dt: number) {
 		const save = this.save;
 		if (!save) return;
-		const list = save.spirits ?? [];
-		while (this.mates.length < list.length) this.mates.push({ x: save.x, y: save.y, swing: 0 });
-		this.mates.length = list.length;
+		const list = this.outSpirits();
+		const keep = new Set(list.map((s) => s.uid));
+		for (const id of Object.keys(this.mateBy)) if (!keep.has(id)) delete this.mateBy[id];
 		list.forEach((spirit, i) => {
-			const at = this.mates[i]!;
+			const at = this.mateBy[spirit.uid] ?? { x: save.x, y: save.y, swing: 0 };
+			this.mateBy[spirit.uid] = at;
 			at.swing = Math.max(0, at.swing - dt * 3);
 			if (spirit.hp <= 0) {
 				at.x += (save.x - this.facing * 18 - at.x) * Math.min(1, dt * 2);
@@ -2994,48 +3142,79 @@ export class TurbzGame {
 		}
 	}
 	catchSpirit() {
+		return this.useSpiritJar();
+	}
+	useSpiritJar() {
 		const save = this.save;
-		const mob = this.nearestMob(save.x, save.y, 70);
-		if (!mob) return this.say("No spirit close.");
-		if ((save.bag.ghost_jar ?? 0) <= 0) return this.say("Need a ghost jar.");
-		if (mob.boss) return this.say("That one does not fit.");
-		const pct = mob.hp / mob.max;
-		if (pct > .5) return this.say("Soften it first.");
-		const chance = .22 + (1 - pct) * .5 + save.skills.catching.level * .004 + this.chan("catch_boost") / 100;
+		if (!save) return;
+		if ((save.bag.ghost_jar ?? 0) <= 0) return this.say("Need a spirit jar.");
 		save.bag.ghost_jar -= 1;
-		if (Math.random() > chance) {
-			this.say(`${mob.name} slips the jar.`);
-			return;
-		}
-		const pet = {
-			species: mob.species,
-			level: mob.level,
-			rarity: mob.rarity
-		};
-		if (!save.companion) save.companion = pet;
-		else save.box.push(pet);
-		mob.alive = false;
-		mob.respawn = 20;
-		this.gainSkill("catching", 18);
-		save.catches[mob.type] = (save.catches[mob.type] ?? 0) + 1;
-		if (this.world && biomeNameAt(this.world, save.x, save.y) === "ashen") {
-			if (mob.type === "fire") {
-				const q = save.quests.ember_hunt;
-				if (!q.done) {
-					q.n += 1;
-					if (q.n >= 2) this.completeQuest("ember_hunt");
-				}
-			}
-		}
-		const fires = save.catches.fire ?? 0;
-		const lights = save.catches.light ?? 0;
-		if (fires >= 1 && lights >= 1) {
-			if (!save.quests.keeper_lanterns.done) this.completeQuest("keeper_lanterns");
-		}
-		if (mob.type === "water" && save.quests.marsh_walk.n >= 1 && !save.quests.marsh_walk.done) this.completeQuest("marsh_walk");
-		this.say(`${mob.name} jarred.`);
+		save.jarLure = Math.min(180, (save.jarLure ?? 0) + 60);
+		const pct = Math.round(this.recruitChance(null) * 100);
+		this.say(`Spirit jar cracks. For ${Math.ceil(save.jarLure)}s, slain foes stay more often (${pct}%).`);
 		this.tone(600, .12, "triangle");
 		this.persist();
+		this.syncHud(true);
+	}
+	buyGhostSlot() {
+		const save = this.save;
+		if (!save) return;
+		const extra = Math.max(0, save.ghostSlots ?? 0);
+		if (extra >= SPIRIT_SLOT_MAX) return this.say(`No more ghost slots. ${this.spiritFollowMax()} spirits can already follow.`);
+		if ((save.skillPoints ?? 0) < 1) return this.say("Need 1 skill point. Level up, then open Verses or the spirit party.");
+		save.skillPoints -= 1;
+		save.ghostSlots = extra + 1;
+		this.say(`Ghost slot opened. ${this.spiritFollowMax()} spirits can follow and fight.`);
+		this.persist();
+		this.syncHud(true);
+	}
+	toggleSpirit(uid: string) {
+		const save = this.save;
+		if (!save) return;
+		const spirit = (save.spirits ?? []).find((s) => s.uid === uid);
+		if (!spirit) return;
+		if (spirit.out) {
+			spirit.out = false;
+			this.say(`${spirit.name} waits in the party.`);
+		} else {
+			if (this.outCount() >= this.spiritFollowMax()) {
+				this.say(`Only ${this.spiritFollowMax()} can follow. Bench one, or buy a Ghost Slot.`);
+				this.syncHud(true);
+				return;
+			}
+			spirit.out = true;
+			this.say(`${spirit.name} follows.`);
+		}
+		this.persist();
+		this.syncHud(true);
+	}
+	dismissSpirit(uid: string) {
+		const save = this.save;
+		if (!save?.spirits) return;
+		const i = save.spirits.findIndex((s) => s.uid === uid);
+		if (i < 0) return;
+		const gone = save.spirits[i]!;
+		save.spirits.splice(i, 1);
+		delete this.mateBy[uid];
+		this.say(`${gone.name} is dismissed.`);
+		this.persist();
+		this.syncHud(true);
+	}
+	setSpiritMove(uid: string, slot: number, moveId: string) {
+		const save = this.save;
+		if (!save) return;
+		const spirit = (save.spirits ?? []).find((s) => s.uid === uid);
+		if (!spirit || slot < 0 || slot >= SPIRIT_EQUIPPED) return;
+		if (!spirit.known?.includes(moveId) || !spiritMove(moveId)) return;
+		this.fillSpirit(spirit);
+		const other = spirit.slots.indexOf(moveId);
+		const prev = spirit.slots[slot];
+		if (other >= 0 && other !== slot) spirit.slots[other] = prev ?? spirit.slots[other];
+		spirit.slots[slot] = moveId;
+		spirit.move = spirit.slots[0] ?? moveId;
+		if (spirit.look) spirit.look.move = spirit.move;
+		this.persist();
+		this.syncHud(true);
 	}
 	turnSalt() {
 		const save = this.save;
@@ -3060,7 +3239,7 @@ export class TurbzGame {
 		if (!save || !def || this.dead || (save.bag[id] ?? 0) <= 0) return;
 		const issue = this.itemProblem(def);
 		if (issue) return this.say(issue);
-		if (id === "ghost_jar") return this.catchSpirit();
+		if (id === "ghost_jar") return this.useSpiritJar();
 		if (id === "smoke_bomb") {
 			save.bag[id] -= 1;
 			this.dest = null;
@@ -3481,19 +3660,45 @@ export class TurbzGame {
 		save.party = save.party ?? [];
 		save.found = save.found ?? {};
 		save.spirits = save.spirits ?? [];
+		save.ghostSlots = Math.max(0, Math.min(SPIRIT_SLOT_MAX, Math.floor(save.ghostSlots ?? 0)));
+		save.jarLure = Math.max(0, save.jarLure ?? 0);
 		save.accountScore = save.accountScore ?? 0;
 		save.evilMark = save.evilMark ?? 0;
-		if (save.companion && save.spirits.length === 0) {
-			const def = MONSTER_BY_ID[save.companion.species];
-			if (def) {
-				const look = rollGhostLook(mulberry32(save.seed || 1), save.companion.rarity || 0, "measured", "hunt");
-				save.spirits.push({
-					uid: nextUid(), species: save.companion.species, name: def.name, type: def.type, template: def.template,
-					level: save.companion.level, rarity: save.companion.rarity || 0, look, move: look.move,
-					hp: 30 + save.companion.level * 8, max: 30 + save.companion.level * 8, speed: 8 + save.companion.level
-				});
+		save.box = save.box ?? [];
+		const adopt = (pet) => {
+			if (!pet || save.spirits.length >= SPIRIT_STORE_MAX) return;
+			const def = MONSTER_BY_ID[pet.species];
+			if (!def) return;
+			const dup = save.spirits.some((s) => s.species === pet.species && s.level === pet.level && s.name === (pet.name || def.name));
+			if (dup) return;
+			const look = pet.look ?? rollGhostLook(mulberry32((save.seed || 1) ^ save.spirits.length), pet.rarity || 0, pet.move || "measured", "hunt");
+			save.spirits.push({
+				uid: nextUid(), species: pet.species, name: pet.name || def.name, type: pet.type || def.type, template: pet.template ?? def.template,
+				level: pet.level || 1, rarity: pet.rarity || 0, look, move: pet.move || look.move,
+				known: [], slots: [], hp: pet.hp ?? 30 + (pet.level || 1) * 8, max: pet.max ?? 30 + (pet.level || 1) * 8,
+				speed: pet.speed ?? 8 + (pet.level || 1), out: false
+			});
+		};
+		adopt(save.companion);
+		for (const pet of save.box) adopt(pet);
+		save.companion = null;
+		save.box = [];
+		save.spirits = save.spirits.slice(0, SPIRIT_STORE_MAX);
+		for (const s of save.spirits) this.fillSpirit(s);
+		let room = SPIRIT_FOLLOW_BASE + save.ghostSlots;
+		const anyOut = save.spirits.some((s) => s.out);
+		if (!anyOut) {
+			for (const s of save.spirits) {
+				if (room <= 0) break;
+				s.out = true;
+				room -= 1;
 			}
-			save.companion = null;
+		} else {
+			for (const s of save.spirits) {
+				if (!s.out) continue;
+				if (room <= 0) s.out = false;
+				else room -= 1;
+			}
 		}
 		if (!save.innate?.length) {
 			const seed = save.seed || 1;
@@ -4045,7 +4250,35 @@ export class TurbzGame {
 				shrine: npc.shrine ?? null
 			} : null,
 			shrine: this.shrine ? `${TYPES[this.shrine.type].name} shrine · round ${this.shrine.round}/3` : "",
-			companion: (save.spirits ?? []).filter((s) => s.hp > 0).map((s) => `${s.name} lv${s.level}`).join(", ") || "No spirits",
+			companion: (() => {
+				const out = (save.spirits ?? []).filter((s) => s.out);
+				const live = out.filter((s) => s.hp > 0).map((s) => s.name);
+				if (!out.length) return (save.spirits ?? []).length ? `${save.spirits.length} held · none following` : "No spirits";
+				return `${live.join(", ") || "down"} · ${out.length}/${this.spiritFollowMax()}`;
+			})(),
+			spiritParty: (save.spirits ?? []).map((s) => ({
+				uid: s.uid,
+				name: s.name,
+				type: s.type,
+				level: s.level,
+				rarity: s.rarity,
+				hp: Math.max(0, Math.ceil(s.hp)),
+				max: Math.ceil(s.max),
+				out: !!s.out,
+				known: (s.known ?? []).map((id) => {
+					const m = spiritMove(id);
+					return { id, name: m?.name ?? id, type: m?.type ?? s.type, about: m?.about ?? "", ally: !!(m && isAllyMove(m)) };
+				}),
+				slots: (s.slots ?? []).slice(0, 3)
+			})),
+			spiritStore: SPIRIT_STORE_MAX,
+			spiritOut: (save.spirits ?? []).filter((s) => s.out).length,
+			spiritOutMax: this.spiritFollowMax(),
+			jarLure: Math.max(0, Math.ceil(save.jarLure ?? 0)),
+			jarChance: Math.round(this.recruitChance(null) * 100),
+			ghostSlots: save.ghostSlots ?? 0,
+			ghostSlotMax: SPIRIT_SLOT_MAX,
+			jars: save.bag.ghost_jar ?? 0,
 			accountScore: save.accountScore ?? 0,
 			turn: this.duel ? (this.duel.phase === "yours" ? "Your verse" : `${this.duel.lead?.name ?? "They"} readies`) : this.turnQ[0] ? (this.turnQ[0].side === "you" ? "Your turn" : this.turnQ[0].side === "spirit" ? "Spirit" : "Enemy") : "",
 			survival: this.rules === "hardcore" ? { ...save.survival } : null,
@@ -4326,16 +4559,18 @@ export class TurbzGame {
 				"legendary"
 			].indexOf(g.quality)
 		}));
-		(save.spirits ?? []).forEach((spirit, i) => {
-			const at = this.mates[i];
-			if (!at || spirit.hp <= 0) return;
+		for (const spirit of (save.spirits ?? []).filter((s) => s.out)) {
+			const at = this.mateBy[spirit.uid];
+			if (!at) continue;
+			ctx.save();
+			ctx.globalAlpha = spirit.hp <= 0 ? 0.4 : 1;
 			drawMonster(ctx, {
 				x: at.x,
 				y: at.y,
 				template: spirit.template,
 				type: spirit.type,
 				facing: this.facing,
-				walk: this.walk + i,
+				walk: this.walk,
 				hurt: at.swing > 0 ? 0.2 : 0,
 				boss: false,
 				rarity: spirit.rarity,
@@ -4343,8 +4578,9 @@ export class TurbzGame {
 				look: spirit.look,
 				time: this.clock
 			});
-			drawShadowName(ctx, spirit.name, at.x, at.y - 36, TYPES[spirit.type].color);
-		});
+			drawShadowName(ctx, spirit.hp <= 0 ? `${spirit.name} down` : spirit.name, at.x, at.y - 36, TYPES[spirit.type].color);
+			ctx.restore();
+		}
 		for (const id of save.party ?? []) {
 			const npc = NPCS.find((n) => n.id === id);
 			if (!npc) continue;
@@ -4649,7 +4885,7 @@ export class TurbzGame {
 			},
 			{
 				id: "menu:jar",
-				label: "Jar"
+				label: "Spirit Jar"
 			},
 			{
 				id: "menu:bounty",
@@ -5020,7 +5256,7 @@ export class TurbzGame {
 		if (mob.party) dmg *= .58;
 		if (mob.summoner) dmg *= .82;
 		if (mob.dungeonBoss) dmg *= .6;
-		dmg *= 1 - Math.min(.45, this.chan("ward") / 160 + (this.buff?.ward ?? 0));
+		dmg *= 1 - Math.min(.45, this.chan("ward") / 160 + (this.buff?.t > 0 ? (this.buff?.ward ?? 0) : 0));
 		return Math.max(1, dmg);
 	}
 	resolveExchange(pMove) {
